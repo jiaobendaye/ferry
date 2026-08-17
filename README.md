@@ -1,7 +1,10 @@
-# ferry — Range-capable HTTP file download server
+# ferry — Range-capable HTTP file download server + client
 
-An HTTP file server built on [Sogou Workflow](https://github.com/sogou/workflow)
-(fully asynchronous C++ framework) and built with [xmake](https://xmake.io).
+A file-transfer pair built on [Sogou Workflow](https://github.com/sogou/workflow)
+(fully asynchronous C++ framework) and built with [xmake](https://xmake.io):
+`ferry-server` serves files as capped Range responses; `ferry-client` is a
+multi-threaded, resumable downloader that pairs with it (and works against
+any RFC-conformant Range server).
 
 Features:
 
@@ -22,7 +25,52 @@ Features:
   `X-Forwarded-For` entry (the one appended by the nearest trusted proxy),
   which cannot be forged by the client; falls back to the socket peer.
 
-Source lives in `server/`; a download **client** is planned under `client/`.
+Server source lives in `server/`, client source in `client/` (no shared
+library — the two are mirrors of each other's Range logic).
+
+## Client (ferry-client)
+
+Multi-threaded chunked downloader: splits the file into fixed chunks
+(default 8 MiB), claims them dynamically across workers, verifies and
+reassembles, and gates the final output file behind a streaming sha256.
+
+```bash
+xmake run ferry-client -- http://host:8080/path/file.bin
+ferry-client -j 8 -o out.bin --checksum sha-256=<hex> <url>
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-o, --output PATH` | URL basename | Output file (data lands in `<out>.part` first) |
+| `-j, --jobs N` | `4` | Worker count (effective = min(jobs, chunks)) |
+| `--chunk-size BYTES` | `8388608` | Request chunk size — bounds per-response memory |
+| `--checksum sha-256=<hex>` | off | Expected digest; mismatch keeps files + fails |
+| `--no-verify` | off | Skip the final sha256 pass (digest is otherwise always computed and printed) |
+| `--receive-timeout SEC` | `60` | Per-request timeout — must exceed the server's `max_wait_sec` |
+| `--single-stream-limit BYTES` | `256 MiB` | Max size accepted from servers without Range support |
+| `-q, --quiet` | off | Suppress the per-second progress line |
+
+**Resume.** Progress persists in `<out>.part` (data) + `<out>.ferry.json`
+(url, size, Last-Modified, chunk_size, completion bitmap), rewritten
+atomically after every chunk. Re-run the same command to resume; a HEAD
+check compares size and Last-Modified first — if the file changed, state is
+discarded with a warning and the download restarts. SIGINT exits cleanly
+with resumable state; kill -9 is also survivable (at most one finished
+chunk re-downloads).
+
+**Server compatibility.** Against Range servers (including ferry-server)
+the client adapts to whatever cap the server applies — truncated responses
+just mean more iterations. Against servers without Range support it falls
+back to a single-stream download bounded by `--single-stream-limit`
+(Workflow buffers whole responses, so an unbounded fallback would risk
+OOM). 429 responses are honored via `max(Retry-After, backoff)`; transient
+errors retry with exponential backoff (500 ms × 2^n, capped at 30 s, 8
+attempts); 403/404 stop all workers.
+
+**Two couplings to know.** (1) `--receive-timeout` must stay larger than
+the server's `max_wait_sec`, or soft-shaped responses read as timeouts.
+(2) ferry-server rate-limits per IP, so one client's workers share a single
+bucket: concurrency hides latency but does not multiply bandwidth.
 
 ## Build & run
 
@@ -99,12 +147,16 @@ Limiter state entries for idle IPs are reclaimed automatically.
 
 ## Testing
 
-Three layers (see `openspec/changes/add-range-file-server/design.md`, D7):
+Three layers (see the design docs' testing sections):
 
 ```bash
-xmake run unit-test          # L1: pure logic (range/ACL/XFF/limiter/config/path), no sleeps
-xmake run integration-test   # L2: real WFHttpServer on ephemeral ports + workflow HTTP client
-tests/system/                # L3: shell scripts driving the real binary with curl (fixtures, rate, XFF)
+xmake run unit-test          # L1: pure logic, no sleeps (server: range/ACL/XFF/limiter/config/path;
+                             #     client: planner/bitmap/backoff/cli/progress/probe/sha256)
+xmake run integration-test   # L2: server suite + client closed loop (ferry handler serving,
+                             #     client engine downloading: caps, shaping, 429, resume, fatals)
+tests/system/run_l3.sh       # L3 server: curl-driven (content-verified ranges, hot reload, XFF)
+tests/system/run_client_l3.sh # L3 client: real binaries (SIGKILL-resume, checksum gates,
+                             #     python http.server interop, Range-less fallback)
 ```
 
 AddressSanitizer run (catches nocopy-buffer lifetime bugs):

@@ -18,6 +18,7 @@ if has_config("asan") then
 end
 
 add_requires("workflow v1.0.1")
+add_requires("openssl")
 add_requires("gtest", {configs = {main = true}})
 
-includes("server", "tests")
+includes("server", "client", "tests")
