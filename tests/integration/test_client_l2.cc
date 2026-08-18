@@ -22,8 +22,10 @@
 
 #include "acl.h"
 #include "config.h"
+#include "gates.h"
 #include "handler.h"
 #include "rate_limiter.h"
+#include "stats.h"
 
 #include "bitmap.h"
 #include "cli.h"
@@ -36,10 +38,12 @@ namespace
 class LoopServer
 {
 public:
-	LoopServer(const ferry::ServerConfig& scfg, std::shared_ptr<ferry::Acl> acl,
-			   std::shared_ptr<ferry::RateLimiter> limiter)
+	LoopServer(const ferry::ServerConfig& scfg, std::shared_ptr<ferry::Acl> acl)
 	{
-		this->handler = std::make_shared<ferry::Handler>(scfg, acl, limiter);
+		this->stats = std::make_shared<ferry::Stats>();
+		this->gates = ferry::build_gate_chains(scfg);
+		this->handler = std::make_shared<ferry::Handler>(scfg, acl,
+						this->gates.pre, this->gates.post, this->stats);
 		auto h = this->handler;
 		this->server = new WFHttpServer([h](WFHttpTask *task) {
 			h->process(task);
@@ -71,6 +75,8 @@ public:
 
 	unsigned short port;
 	std::shared_ptr<ferry::Handler> handler;
+	std::shared_ptr<ferry::Stats> stats;
+	ferry::GateSetup gates;
 
 private:
 	WFHttpServer *server;
@@ -156,7 +162,7 @@ protected:
 
 TEST_F(ClientLoop, FullDownloadMatchesSource)
 {
-	LoopServer s(this->scfg, nullptr, nullptr);
+	LoopServer s(this->scfg, nullptr);
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 
 	auto out = run(cfg);
@@ -170,7 +176,7 @@ TEST_F(ClientLoop, FullDownloadMatchesSource)
 
 TEST_F(ClientLoop, SmallFileSingleChunk)
 {
-	LoopServer s(this->scfg, nullptr, nullptr);
+	LoopServer s(this->scfg, nullptr);
 	auto cfg = client_cfg(s.url("/small.bin"), "small.bin");
 	cfg.jobs = 1;
 
@@ -182,7 +188,7 @@ TEST_F(ClientLoop, SmallFileSingleChunk)
 
 TEST_F(ClientLoop, SingleWorker)
 {
-	LoopServer s(this->scfg, nullptr, nullptr);
+	LoopServer s(this->scfg, nullptr);
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 	cfg.jobs = 1;
 
@@ -194,7 +200,7 @@ TEST_F(ClientLoop, SingleWorker)
 TEST_F(ClientLoop, ChunkSizeExactMultiple)
 {
 	/* 3 MiB file, 1 MiB client chunks -> exactly 3 chunks */
-	LoopServer s(this->scfg, nullptr, nullptr);
+	LoopServer s(this->scfg, nullptr);
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 	cfg.chunk_size = 1024 * 1024;
 
@@ -208,8 +214,8 @@ TEST_F(ClientLoop, SlowServerStillSucceeds)
 	/* server shapes at 100 KB/s; 200 KB file -> a few seconds, no errors */
 	write_pattern(this->root + "/shaped.bin", 200 * 1024);
 	this->scfg.rate_bytes_per_sec = 100000;
-	auto limiter = std::make_shared<ferry::RateLimiter>(100000, 30);
-	LoopServer s(this->scfg, nullptr, limiter);
+	this->scfg.max_wait_sec = 30;		/* was passed to the limiter directly */
+	LoopServer s(this->scfg, nullptr);
 
 	auto cfg = client_cfg(s.url("/shaped.bin"), "shaped.bin");
 	cfg.chunk_size = 64 * 1024;
@@ -230,8 +236,7 @@ TEST_F(ClientLoop, RateLimited429RetriesObserved)
 	   so every attempt gets 429 and the client waits per Retry-After /
 	   backoff. Observe several retries, then interrupt. */
 	this->scfg.rate_bytes_per_sec = 10000;
-	auto limiter = std::make_shared<ferry::RateLimiter>(10000, 1);
-	LoopServer s(this->scfg, nullptr, limiter);
+	LoopServer s(this->scfg, nullptr);
 
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 	cfg.jobs = 1;
@@ -259,8 +264,8 @@ TEST_F(ClientLoop, InterruptThenResume)
 	   at 1.2 s lands mid-download; resume against the SAME server (same
 	   URL) must detect and reuse the saved state. */
 	this->scfg.rate_bytes_per_sec = 1048576;
-	auto limiter = std::make_shared<ferry::RateLimiter>(1048576, 30);
-	LoopServer s(this->scfg, nullptr, limiter);
+	this->scfg.max_wait_sec = 30;		/* was passed to the limiter directly */
+	LoopServer s(this->scfg, nullptr);
 
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 	cfg.chunk_size = 128 * 1024;
@@ -291,8 +296,8 @@ TEST_F(ClientLoop, InterruptThenResume)
 TEST_F(ClientLoop, ChangedFileRestartsCleanly)
 {
 	this->scfg.rate_bytes_per_sec = 1048576;
-	auto limiter = std::make_shared<ferry::RateLimiter>(1048576, 30);
-	LoopServer s(this->scfg, nullptr, limiter);
+	this->scfg.max_wait_sec = 30;		/* was passed to the limiter directly */
+	LoopServer s(this->scfg, nullptr);
 
 	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
 	cfg.chunk_size = 128 * 1024;
@@ -326,7 +331,7 @@ TEST_F(ClientLoop, ForbiddenIsFatal)
 		out << "blacklist 127.0.0.1\n";
 	}
 	auto acl = std::make_shared<ferry::Acl>(acl_path);
-	LoopServer s(this->scfg, acl, nullptr);
+	LoopServer s(this->scfg, acl);
 
 	auto cfg = client_cfg(s.url("/small.bin"), "small.bin");
 	auto out = run(cfg);
@@ -337,7 +342,7 @@ TEST_F(ClientLoop, ForbiddenIsFatal)
 
 TEST_F(ClientLoop, MissingFileIsFatal)
 {
-	LoopServer s(this->scfg, nullptr, nullptr);
+	LoopServer s(this->scfg, nullptr);
 	auto cfg = client_cfg(s.url("/nope.bin"), "nope.bin");
 	auto out = run(cfg);
 	EXPECT_FALSE(out.success);

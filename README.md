@@ -1,5 +1,7 @@
 # ferry — Range-capable HTTP file download server + client
 
+English | [简体中文](README.zh-CN.md)
+
 A file-transfer pair built on [Sogou Workflow](https://github.com/sogou/workflow)
 (fully asynchronous C++ framework) and built with [xmake](https://xmake.io):
 `ferry-server` serves files as capped Range responses; `ferry-client` is a
@@ -21,6 +23,13 @@ Features:
 - **Per-IP bandwidth limiting**: token-bucket soft shaping — an over-budget
   request is delayed inside the Workflow series (no thread blocked) up to a
   configured wait cap, beyond which it gets `429 + Retry-After`.
+- **Admission gates**: global QPS, in-flight, and bandwidth caps protect the
+  server as a whole; per-IP QPS, in-flight, and bandwidth quotas keep clients
+  from crowding one another. Rate gates soft-shape then return `429`, while
+  concurrency gates reject immediately with `503 + Retry-After`.
+- **Runtime statistics**: request/status/served-byte totals, per-gate
+  rejections, current/peak in-flight requests, and active per-IP buckets are
+  available as periodic single-line logs and on demand with `SIGUSR1`.
 - **Proxy-aware client IP**: the real client is taken from the rightmost
   `X-Forwarded-For` entry (the one appended by the nearest trusted proxy),
   which cannot be forged by the client; falls back to the socket peer.
@@ -69,8 +78,9 @@ attempts); 403/404 stop all workers.
 
 **Two couplings to know.** (1) `--receive-timeout` must stay larger than
 the server's `max_wait_sec`, or soft-shaped responses read as timeouts.
-(2) ferry-server rate-limits per IP, so one client's workers share a single
-bucket: concurrency hides latency but does not multiply bandwidth.
+(2) One client's workers share that IP's QPS, concurrency, and bandwidth
+budgets. A large `-j` can therefore trigger `429`/`503` and backoff;
+concurrency hides latency but does not multiply the per-IP quotas.
 
 ## Build & run
 
@@ -97,7 +107,13 @@ Flat `key = value` file; `#` comments. Invalid values fail startup loudly.
 | `cap_bytes` | `8388608` | Max bytes per response (range truncation cap) |
 | `size_threshold_bytes` | = `cap_bytes` | Non-Range requests above this → `413` |
 | `rate_bytes_per_sec` | `0` (off) | Per-IP bandwidth limit |
+| `rate_total_bps` | `0` (off) | Whole-server bandwidth limit |
+| `qps_total` | `0` (off) | Whole-server request-rate limit |
+| `qps_per_ip` | `0` (off) | Per-IP request-rate quota |
+| `max_inflight` | `0` (off) | Whole-server in-flight request cap |
+| `max_inflight_per_ip` | `0` (off) | Per-IP in-flight request quota |
 | `max_wait_sec` | `30` | Max shaping delay before `429` |
+| `stats_interval_sec` | `0` (off) | Periodic stats-log interval |
 | `trust_hops` | `1` | Which XFF entry from the right is the client |
 | `acl_file` | empty (off) | ACL rules file (hot-reloaded) |
 | `acl_poll_interval_sec` | `5` | ACL mtime poll period |
@@ -133,10 +149,21 @@ the header gains nothing. With N chained trusted proxies set
 ### Memory sizing
 
 Responses are buffered before sending (Workflow's server model), so peak
-memory ≈ concurrent in-flight responses × `cap_bytes`. Tune
-`max_connections` and `cap_bytes` together: e.g. cap 8 MiB × 2000
-connections ≈ 16 GiB worst case — lower `max_connections` for smaller
-hosts.
+response-buffer memory is bounded by `max_inflight × cap_bytes` when
+`max_inflight` is configured. For example, 128 × 8 MiB is approximately
+1 GiB. With that gate off, use `max_connections × cap_bytes` as the
+conservative sizing bound. Tune the cap and gate together for the host.
+
+### Protection versus fairness
+
+Global gates (`qps_total`, `max_inflight`, `rate_total_bps`) protect one
+server instance regardless of how many identities generate the traffic.
+Per-IP gates (`qps_per_ip`, `max_inflight_per_ip`, `rate_bytes_per_sec`)
+divide capacity fairly but do not cap aggregate demand when the number of
+IPs grows. Set global protection first, then add per-IP quotas for fairness.
+Global gates run before per-IP gates so rejected floods do not grow the
+per-IP limiter maps. Waiting requests occupy in-flight slots, so leave room
+for shaped backlog when choosing `max_inflight`.
 
 ### Rate limiting semantics
 
@@ -144,6 +171,23 @@ Limits are **per server instance** (single-instance design). For
 multi-instance scale-out, use LB IP-affinity (consistent hashing) so each
 client IP lands on one instance, or move the buckets to shared storage.
 Limiter state entries for idle IPs are reclaimed automatically.
+
+### Statistics and on-demand dump
+
+Set `stats_interval_sec` to emit one parseable line at each interval:
+
+```text
+[stats] reqs=120(+20) 2xx=100 404=2 4xx=15 5xx=3 rej(qps_total)=10 ... inflight=4 peak=18 buckets(qps)=7 buckets(bw)=6 served=10485760
+```
+
+The line includes cumulative and interval request counts, status classes,
+all six gate-rejection counters, current/peak in-flight requests, active
+per-IP bucket counts, and served bytes. Send `SIGUSR1` to request a line
+within one second even when periodic output is disabled:
+
+```bash
+kill -USR1 <ferry-server-pid>
+```
 
 ## Testing
 

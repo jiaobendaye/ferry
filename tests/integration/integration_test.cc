@@ -26,8 +26,10 @@
 
 #include "acl.h"
 #include "config.h"
+#include "gates.h"
 #include "handler.h"
 #include "rate_limiter.h"
+#include "stats.h"
 
 namespace
 {
@@ -51,10 +53,12 @@ static std::string lower(std::string s)
 class TestServer
 {
 public:
-	TestServer(const ferry::ServerConfig& cfg, std::shared_ptr<ferry::Acl> acl,
-			   std::shared_ptr<ferry::RateLimiter> limiter)
+	TestServer(const ferry::ServerConfig& cfg, std::shared_ptr<ferry::Acl> acl)
 	{
-		this->handler = std::make_shared<ferry::Handler>(cfg, acl, limiter);
+		this->stats = std::make_shared<ferry::Stats>();
+		this->gates = ferry::build_gate_chains(cfg);
+		this->handler = std::make_shared<ferry::Handler>(cfg, acl,
+						this->gates.pre, this->gates.post, this->stats);
 		auto h = this->handler;
 		this->server = new WFHttpServer([h](WFHttpTask *task) {
 			h->process(task);
@@ -136,6 +140,8 @@ public:
 
 	unsigned short port;
 	std::shared_ptr<ferry::Handler> handler;
+	std::shared_ptr<ferry::Stats> stats;
+	ferry::GateSetup gates;
 
 private:
 	WFHttpServer *server;
@@ -187,7 +193,7 @@ protected:
 
 TEST_F(FileFixture, WholeFile200)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/small.txt");
 
 	ASSERT_EQ(r.task_state, WFT_STATE_SUCCESS);
@@ -200,7 +206,7 @@ TEST_F(FileFixture, WholeFile200)
 
 TEST_F(FileFixture, NestedPath200)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/nested/data.txt");
 	EXPECT_EQ(r.status, "200");
 	EXPECT_EQ(r.body.size(), 200u);
@@ -208,7 +214,7 @@ TEST_F(FileFixture, NestedPath200)
 
 TEST_F(FileFixture, RangeExact206)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/big.bin", {{"Range", "bytes=0-99"}});
 
 	EXPECT_EQ(r.status, "206");
@@ -220,7 +226,7 @@ TEST_F(FileFixture, RangeExact206)
 
 TEST_F(FileFixture, OpenEndedRangeCapped)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/big.bin", {{"Range", "bytes=0-"}});
 
 	EXPECT_EQ(r.status, "206");
@@ -230,7 +236,7 @@ TEST_F(FileFixture, OpenEndedRangeCapped)
 
 TEST_F(FileFixture, SuffixRange)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/small.txt", {{"Range", "bytes=-100"}});
 
 	EXPECT_EQ(r.status, "206");
@@ -241,7 +247,7 @@ TEST_F(FileFixture, SuffixRange)
 
 TEST_F(FileFixture, PastEndIs416)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/small.txt", {{"Range", "bytes=99999-"}});
 
 	EXPECT_EQ(r.status, "416");
@@ -251,7 +257,7 @@ TEST_F(FileFixture, PastEndIs416)
 
 TEST_F(FileFixture, MultiRangeKeepsFirst)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/small.txt", {{"Range", "bytes=0-9,500-509"}});
 
 	EXPECT_EQ(r.status, "206");
@@ -261,14 +267,14 @@ TEST_F(FileFixture, MultiRangeKeepsFirst)
 
 TEST_F(FileFixture, InvalidUnitFallsBack)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	EXPECT_EQ(s.get("/small.txt", {{"Range", "items=0-9"}}).status, "200");
 	EXPECT_EQ(s.get("/big.bin", {{"Range", "items=0-9"}}).status, "413");
 }
 
 TEST_F(FileFixture, LargeFileNoRangeIs413)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/big.bin");
 
 	EXPECT_EQ(r.status, "413");
@@ -279,7 +285,7 @@ TEST_F(FileFixture, LargeFileNoRangeIs413)
 
 TEST_F(FileFixture, MissingIs404)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/nope.bin");
 	EXPECT_EQ(r.status, "404");
 	EXPECT_EQ(r.headers["accept-ranges"], "bytes");
@@ -287,20 +293,20 @@ TEST_F(FileFixture, MissingIs404)
 
 TEST_F(FileFixture, TraversalIs400)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	EXPECT_EQ(s.get("/../etc/passwd").status, "400");
 	EXPECT_EQ(s.get("/%2e%2e/%2e%2e/etc/passwd").status, "400");
 }
 
 TEST_F(FileFixture, OtherMethodIs405)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	EXPECT_EQ(s.request("/small.txt", "POST", {}).status, "405");
 }
 
 TEST_F(FileFixture, IfRangeMatchGives206)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 
 	/* discover Last-Modified first */
 	auto head = s.request("/small.txt", "HEAD", {});
@@ -315,7 +321,7 @@ TEST_F(FileFixture, IfRangeMatchGives206)
 
 TEST_F(FileFixture, IfRangeStaleFallsBackToWhole)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.get("/small.txt", {
 		{"Range", "bytes=0-9"},
 		{"If-Range", "Thu, 01 Jan 1970 00:00:00 GMT"}});
@@ -328,7 +334,7 @@ TEST_F(FileFixture, IfRangeStaleFallsBackToWhole)
 
 TEST_F(FileFixture, HeadLargeFileRevealsFullSize)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.request("/big.bin", "HEAD", {});
 
 	EXPECT_EQ(r.status, "200");				/* NOT 413 */
@@ -339,7 +345,7 @@ TEST_F(FileFixture, HeadLargeFileRevealsFullSize)
 
 TEST_F(FileFixture, HeadSmallFile)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	auto r = s.request("/small.txt", "HEAD", {});
 	EXPECT_EQ(r.status, "200");
 	EXPECT_EQ(r.headers["content-length"], "1000");
@@ -348,7 +354,7 @@ TEST_F(FileFixture, HeadSmallFile)
 
 TEST_F(FileFixture, HeadMissingIs404)
 {
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 	EXPECT_EQ(s.request("/nope", "HEAD", {}).status, "404");
 }
 
@@ -393,7 +399,7 @@ TEST_F(AclFixture, BlacklistedPeerGets403)
 {
 	write_acl("blacklist 127.0.0.1\n");
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 
 	EXPECT_EQ(s.get("/small.txt").status, "403");
 }
@@ -403,7 +409,7 @@ TEST_F(AclFixture, ForgedLeftmostXffIgnored)
 	/* rightmost (proxy-appended) is blacklisted; leftmost is whitelisted */
 	write_acl("blacklist 127.0.0.1\nwhitelist 10.0.0.1\n");
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 
 	auto r = s.get("/small.txt", {{"X-Forwarded-For", "10.0.0.1, 127.0.0.1"}});
 	EXPECT_EQ(r.status, "403");		/* real IP = 127.0.0.1 (rightmost) */
@@ -413,7 +419,7 @@ TEST_F(AclFixture, WhitelistGate)
 {
 	write_acl("whitelist 10.9.9.9\n");
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 
 	/* peer 127.0.0.1 not whitelisted */
 	EXPECT_EQ(s.get("/small.txt").status, "403");
@@ -427,7 +433,7 @@ TEST_F(AclFixture, NoXffUsesPeerAddress)
 {
 	write_acl("whitelist 127.0.0.1\n");
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 
 	EXPECT_EQ(s.get("/small.txt").status, "200");
 }
@@ -436,7 +442,7 @@ TEST_F(AclFixture, HotReloadChangesBehavior)
 {
 	write_acl("blacklist 1.1.1.1\n");		/* local peer allowed */
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 
 	EXPECT_EQ(s.get("/small.txt").status, "200");
 
@@ -454,7 +460,7 @@ TEST_F(AclFixture, BrokenReloadKeepsOldRules)
 {
 	write_acl("blacklist 127.0.0.1\n");
 	auto acl = std::make_shared<ferry::Acl>(this->acl_path);
-	TestServer s(this->cfg, acl, nullptr);
+	TestServer s(this->cfg, acl);
 	EXPECT_EQ(s.get("/small.txt").status, "403");
 
 	write_acl("blacklist garbage\n", 10);
@@ -467,9 +473,7 @@ TEST_F(AclFixture, BrokenReloadKeepsOldRules)
 TEST_F(FileFixture, RateLimitedShortWaitDelaysThen206)
 {
 	this->cfg.rate_bytes_per_sec = 100000;	/* 100 KB/s */
-	auto limiter = std::make_shared<ferry::RateLimiter>(
-					this->cfg.rate_bytes_per_sec, this->cfg.max_wait_sec);
-	TestServer s(this->cfg, nullptr, limiter);
+	TestServer s(this->cfg, nullptr);
 
 	/* request 1: fresh bucket has 100 KB burst; 64 KB is immediate */
 	auto r1 = s.get("/big.bin", {{"Range", "bytes=0-65535"}});
@@ -487,9 +491,7 @@ TEST_F(FileFixture, RateLimitedOverMaxWaitGets429)
 {
 	this->cfg.rate_bytes_per_sec = 10000;	/* 10 KB/s */
 	this->cfg.cap_bytes = 65536;
-	auto limiter = std::make_shared<ferry::RateLimiter>(
-					this->cfg.rate_bytes_per_sec, this->cfg.max_wait_sec);
-	TestServer s(this->cfg, nullptr, limiter);
+	TestServer s(this->cfg, nullptr);
 
 	/* 64 KB request against 10 KB bucket: ~5.4 s wait > 1 s max */
 	auto r = s.get("/big.bin", {{"Range", "bytes=0-"}});
@@ -502,7 +504,7 @@ TEST_F(FileFixture, RateLimitedOverMaxWaitGets429)
 TEST_F(FileFixture, RateDisabledIsUnrestricted)
 {
 	ASSERT_EQ(this->cfg.rate_bytes_per_sec, 0);
-	TestServer s(this->cfg, nullptr, nullptr);
+	TestServer s(this->cfg, nullptr);
 
 	auto r = s.get("/big.bin", {{"Range", "bytes=0-"}});
 	EXPECT_EQ(r.status, "206");

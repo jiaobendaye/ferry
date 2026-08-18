@@ -38,7 +38,13 @@ TEST(Config, ParsesAllKeys)
 		"trust_hops = 2\n"
 		"acl_file = /etc/acl.conf\n"
 		"acl_poll_interval_sec = 3\n"
-		"max_connections = 500\n");
+		"max_connections = 500\n"
+		"qps_total = 1000\n"
+		"qps_per_ip = 20\n"
+		"max_inflight = 500\n"
+		"max_inflight_per_ip = 8\n"
+		"rate_total_bps = 10485760\n"
+		"stats_interval_sec = 30\n");
 
 	ferry::ServerConfig cfg = ferry::load_config(f.path());
 	EXPECT_EQ(cfg.port, 9090);
@@ -52,6 +58,12 @@ TEST(Config, ParsesAllKeys)
 	EXPECT_EQ(cfg.acl_file, "/etc/acl.conf");
 	EXPECT_EQ(cfg.acl_poll_interval_sec, 3);
 	EXPECT_EQ(cfg.max_connections, 500);
+	EXPECT_EQ(cfg.qps_total, 1000);
+	EXPECT_EQ(cfg.qps_per_ip, 20);
+	EXPECT_EQ(cfg.max_inflight, 500);
+	EXPECT_EQ(cfg.max_inflight_per_ip, 8);
+	EXPECT_EQ(cfg.rate_total_bps, 10485760);
+	EXPECT_EQ(cfg.stats_interval_sec, 30);
 }
 
 TEST(Config, DefaultsAndComments)
@@ -72,6 +84,12 @@ TEST(Config, DefaultsAndComments)
 	EXPECT_EQ(cfg.max_wait_sec, 30);
 	EXPECT_EQ(cfg.trust_hops, 1);
 	EXPECT_TRUE(cfg.acl_file.empty());
+	EXPECT_EQ(cfg.qps_total, 0);				/* gates off by default */
+	EXPECT_EQ(cfg.qps_per_ip, 0);
+	EXPECT_EQ(cfg.max_inflight, 0);
+	EXPECT_EQ(cfg.max_inflight_per_ip, 0);
+	EXPECT_EQ(cfg.rate_total_bps, 0);
+	EXPECT_EQ(cfg.stats_interval_sec, 0);
 }
 
 TEST(Config, UnknownKeyIsTolerated)
@@ -103,6 +121,12 @@ TEST(Config, InvalidValuesThrow)
 		"size_threshold_bytes = -3",
 		"root = ",
 		"this is not key value",
+		"qps_total = -1",
+		"qps_per_ip = -5",
+		"max_inflight = -1",
+		"max_inflight_per_ip = -2",
+		"rate_total_bps = -100",
+		"stats_interval_sec = -30",
 	};
 
 	for (const char *content : bad)

@@ -1,44 +1,40 @@
 #ifndef WF_RATE_LIMITER_H
 #define WF_RATE_LIMITER_H
 
-#include <chrono>
-#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+
+#include "token_bucket.h"
 
 namespace ferry
 {
 
 /*
- * Per-IP bandwidth limiter (token bucket, bytes/sec). The time source is
- * injectable: production passes the default (steady_clock), unit tests
- * pass a fake clock and advance it exactly — no sleeping in tests.
+ * Per-key token-bucket limiter (a keyed map of TokenBucket). Used for
+ * per-IP budgets: bytes/sec bandwidth limiting and requests/sec QPS
+ * limiting (units are caller-defined; see TokenBucket). The time source
+ * is injectable: production passes the default (steady_clock), unit
+ * tests pass a fake clock and advance it exactly — no sleeping in tests.
  *
  * rate_bps == 0 disables limiting entirely (reserve always grants).
  */
 class RateLimiter
 {
 public:
-	using TimePoint = std::chrono::steady_clock::time_point;
-	using Clock = std::function<TimePoint()>;
-	using Millis = std::chrono::milliseconds;
-
-	struct Verdict
-	{
-		bool rejected = false;	/* true -> reply 429 */
-		Millis wait{0};			/* delay before serving (0 = now) */
-	};
+	using TimePoint = TokenBucket::TimePoint;
+	using Clock = TokenBucket::Clock;
+	using Millis = TokenBucket::Millis;
+	using Verdict = TokenBucket::Verdict;
 
 	explicit RateLimiter(long long rate_bps, long long max_wait_sec,
 						 Clock clock = std::chrono::steady_clock::now);
 
 	/*
-	 * Reserve `bytes` for `ip_key`. Charges the bucket (possibly into
-	 * negative) when the request is granted, so the subsequent wait
-	 * accrues against it. On rejection no state is changed.
+	 * Reserve `tokens` for `ip_key`. Creates a fresh bucket (one second
+	 * of burst) on first use. On rejection no state is changed.
 	 */
-	Verdict reserve(const std::string& ip_key, long long bytes);
+	Verdict reserve(const std::string& ip_key, long long tokens);
 
 	/* Drop buckets idle for longer than `idle_threshold`. */
 	void sweep(Millis idle_threshold);
@@ -48,19 +44,25 @@ public:
 	size_t size();						/* active buckets (for tests) */
 
 private:
-	struct Bucket
+	/* TokenBucket is non-movable (holds a mutex), so Entry is
+	   constructed in place inside the map node. */
+	struct Entry
 	{
-		double tokens;
-		TimePoint last_refill;
+		TokenBucket bucket;
 		TimePoint last_active;
+
+		Entry(long long rate, long long max_wait_sec, const Clock& clock,
+			  TimePoint now)
+			: bucket(rate, max_wait_sec, clock), last_active(now)
+		{
+		}
 	};
 
 	long long rate_bps_;
-	Millis max_wait_;
+	long long max_wait_sec_;
 	Clock clock_;
-	double capacity_;					/* 1 second worth of tokens */
 	std::mutex mutex_;
-	std::unordered_map<std::string, Bucket> buckets_;
+	std::unordered_map<std::string, Entry> buckets_;
 };
 
 } // namespace ferry

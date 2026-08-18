@@ -7,7 +7,8 @@
 #include "acl.h"
 #include "client_ip.h"
 #include "config.h"
-#include "rate_limiter.h"
+#include "gate.h"
+#include "stats.h"
 
 namespace ferry
 {
@@ -22,24 +23,36 @@ bool uri_to_safe_path(const std::string& root, const char *uri,
 
 /*
  * The request pipeline:
- *   client IP (XFF/peer) -> ACL -> path safety -> stat
- *   -> HEAD shortcut -> If-Range -> Range decision (cap/threshold)
- *   -> rate limiter (timer soft shaping / 429) -> pread series
+ *   client IP (XFF/peer) -> ACL
+ *   -> pre-chain gates (QPS/concurrency: global then per-IP)
+ *   -> path safety -> stat -> HEAD shortcut -> If-Range -> Range
+ *      decision (cap/threshold)
+ *   -> post-chain gates (bandwidth: global then per-IP)
+ *   -> timer (composed shaping delay) -> pread series
+ *
+ * Every request gets a unified completion callback (all paths, sync and
+ * async) that releases gate resources, frees file buffers, and records
+ * the final status into Stats.
  */
 class Handler
 {
 public:
 	Handler(const ServerConfig& cfg, std::shared_ptr<Acl> acl,
-			std::shared_ptr<RateLimiter> limiter);
+			std::shared_ptr<GateChain> pre_chain,
+			std::shared_ptr<GateChain> post_chain,
+			std::shared_ptr<Stats> stats);
 
 	void process(WFHttpTask *server_task);
 
 	const ServerConfig& config() const { return this->cfg_; }
+	std::shared_ptr<Stats> stats() const { return this->stats_; }
 
 private:
-	ServerConfig cfg_;					/* root normalized (no trailing '/') */
-	std::shared_ptr<Acl> acl_;			/* may be null: ACL disabled */
-	std::shared_ptr<RateLimiter> limiter_;	/* may be null: disabled */
+	ServerConfig cfg_;						/* root normalized (no trailing '/') */
+	std::shared_ptr<Acl> acl_;				/* may be null: ACL disabled */
+	std::shared_ptr<GateChain> pre_chain_;	/* never null; may be empty */
+	std::shared_ptr<GateChain> post_chain_;	/* never null; may be empty */
+	std::shared_ptr<Stats> stats_;
 };
 
 } // namespace ferry

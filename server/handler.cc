@@ -131,6 +131,19 @@ static void reply_error(HttpResponse *resp, const char *code,
 	set_text_body(resp, body);
 }
 
+static void reply_gate_reject(HttpResponse *resp, const ChainResult& r)
+{
+	resp->set_status_code(r.status);
+	if (r.retry_after_sec > 0)
+		resp->set_header_pair("Retry-After",
+							  std::to_string(r.retry_after_sec));
+
+	std::string body = r.status;
+	body += (strcmp(r.status, "429") == 0) ? " Too Many Requests"
+										   : " Service Unavailable";
+	set_text_body(resp, body);
+}
+
 /*
  * workflow's HttpHeaderCursor is forward-only and does not rewind after
  * find(), so each lookup uses a fresh cursor.
@@ -170,6 +183,7 @@ struct FileContext
 	long long file_size;
 	time_t mtime;
 	bool partial;					/* 206 vs 200 */
+	long long served = 0;			/* file-content bytes in the response */
 };
 
 static void pread_callback(WFFileIOTask *task)
@@ -202,13 +216,59 @@ static void pread_callback(WFFileIOTask *task)
 	resp->set_header_pair("Last-Modified", http_date(ctx->mtime));
 	resp->set_header_pair("Content-Length", std::to_string(ret));
 	resp->append_output_body_nocopy(args->buf, ret);
+	ctx->served = ret;
+}
+
+/*
+ * Per-request state anchored to server_task->user_data; the unified
+ * completion callback is the single point where gate resources are
+ * released, file buffers freed, and the final status recorded.
+ */
+struct RequestState
+{
+	Stats *stats = nullptr;
+	FileContext *fc = nullptr;
+	bool counted_inflight = false;
+	ReleaseList releases;
+};
+
+static void on_request_complete(WFHttpTask *task)
+{
+	RequestState *rs = (RequestState *)task->user_data;
+
+	if (!rs)
+		return;
+
+	long long served = rs->fc ? rs->fc->served : 0;
+
+	if (rs->fc)
+	{
+		free(rs->fc->buf);
+		delete rs->fc;
+	}
+
+	if (rs->stats)
+	{
+		rs->stats->record_request(task->get_resp()->get_status_code(),
+								  served);
+		if (rs->counted_inflight)
+			rs->stats->inflight_dec();
+	}
+
+	delete rs;						/* releases run in reverse order */
 }
 
 /* ---------------- handler ---------------- */
 
 Handler::Handler(const ServerConfig& cfg, std::shared_ptr<Acl> acl,
-				 std::shared_ptr<RateLimiter> limiter)
-	: cfg_(cfg), acl_(std::move(acl)), limiter_(std::move(limiter))
+				 std::shared_ptr<GateChain> pre_chain,
+				 std::shared_ptr<GateChain> post_chain,
+				 std::shared_ptr<Stats> stats)
+	: cfg_(cfg),
+	  acl_(std::move(acl)),
+	  pre_chain_(std::move(pre_chain)),
+	  post_chain_(std::move(post_chain)),
+	  stats_(std::move(stats))
 {
 	while (this->cfg_.root.size() > 1 && this->cfg_.root.back() == '/')
 		this->cfg_.root.pop_back();
@@ -222,6 +282,12 @@ void Handler::process(WFHttpTask *server_task)
 
 	resp->add_header_pair("Accept-Ranges", "bytes");
 	resp->add_header_pair("Server", "ferry-server");
+
+	/* unified completion hook: every path, sync and async */
+	RequestState *rs = new RequestState();
+	rs->stats = this->stats_.get();
+	server_task->user_data = rs;
+	server_task->set_callback(on_request_complete);
 
 	if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0)
 	{
@@ -248,11 +314,30 @@ void Handler::process(WFHttpTask *server_task)
 		return;
 	}
 
+	std::string ip_key = ip.to_string();
+
 	/* ---- ACL (blacklist priority) ---- */
 	if (this->acl_ && !this->acl_->allowed(ip))
 	{
 		reply_error(resp, "403", "403 Forbidden");
 		return;
+	}
+
+	/* ---- pre-chain gates: QPS + concurrency (global then per-IP) ---- */
+	GateCtx gctx;
+	gctx.ip_key = &ip_key;
+
+	ChainResult pre = this->pre_chain_->run(gctx, this->stats_.get());
+	if (pre.rejected)
+	{
+		reply_gate_reject(resp, pre);
+		return;						/* nothing acquired yet to release */
+	}
+	rs->releases.append(std::move(pre.releases));
+	if (this->stats_)
+	{
+		this->stats_->inflight_inc();
+		rs->counted_inflight = true;
 	}
 
 	/* ---- path safety ---- */
@@ -270,12 +355,22 @@ void Handler::process(WFHttpTask *server_task)
 		return;
 	}
 
-	/* ---- HEAD: headers only, full size, no charge ---- */
+	/* ---- HEAD: headers only, full size, no bandwidth charge ---- */
 	if (strcmp(method, "HEAD") == 0)
 	{
 		resp->set_status_code("200");
 		resp->set_header_pair("Last-Modified", http_date(st.st_mtime));
 		resp->set_header_pair("Content-Length", std::to_string(st.st_size));
+
+		/* pre-chain shaping still applies to HEAD (e.g. QPS gates) */
+		if (pre.delay.count() > 0)
+		{
+			long long ms = pre.delay.count();
+			WFTimerTask *timer = WFTaskFactory::create_timer_task(
+							(unsigned int)(ms / 1000),
+							(unsigned int)((ms % 1000) * 1000000), nullptr);
+			series_of(server_task)->push_back(timer);
+		}
 		return;
 	}
 
@@ -314,19 +409,16 @@ void Handler::process(WFHttpTask *server_task)
 		return;
 	}
 
-	/* ---- rate limiter ---- */
-	RateLimiter::Verdict verdict;
+	/* ---- post-chain gates: bandwidth (global then per-IP) ---- */
+	gctx.bytes = d.length;
 
-	if (this->limiter_ && !this->limiter_->disabled())
-		verdict = this->limiter_->reserve(ip.to_string(), d.length);
-
-	if (verdict.rejected)
+	ChainResult post = this->post_chain_->run(gctx, this->stats_.get());
+	if (post.rejected)
 	{
-		resp->set_header_pair("Retry-After",
-							  std::to_string(this->cfg_.max_wait_sec));
-		reply_error(resp, "429", "429 Too Many Requests");
-		return;
+		reply_gate_reject(resp, post);
+		return;						/* pre-chain releases: RAII at callback */
 	}
+	rs->releases.append(std::move(post.releases));
 
 	/* ---- async file read ---- */
 	int fd = open(path.c_str(), O_RDONLY);
@@ -351,27 +443,23 @@ void Handler::process(WFHttpTask *server_task)
 	ctx->file_size = st.st_size;
 	ctx->mtime = st.st_mtime;
 	ctx->partial = (d.status == 206);
+	rs->fc = ctx;
 
 	WFFileIOTask *pread_task = WFTaskFactory::create_pread_task(
 						fd, buf, (size_t)d.length, (off_t)d.offset,
 						pread_callback);
 	pread_task->user_data = ctx;
 
-	server_task->user_data = ctx;
-	server_task->set_callback([](WFHttpTask *task) {
-		FileContext *c = (FileContext *)task->user_data;
-		free(c->buf);
-		delete c;
-	});
-
 	SeriesWork *series = series_of(server_task);
 
-	if (verdict.wait.count() > 0)
+	/* composed shaping delay: max within each chain, sum across the
+	   pre/post split (both waits must elapse) */
+	long long total_ms = pre.delay.count() + post.delay.count();
+	if (total_ms > 0)
 	{
-		long long ms = verdict.wait.count();
 		WFTimerTask *timer = WFTaskFactory::create_timer_task(
-						(unsigned int)(ms / 1000),
-						(unsigned int)((ms % 1000) * 1000000), nullptr);
+						(unsigned int)(total_ms / 1000),
+						(unsigned int)((total_ms % 1000) * 1000000), nullptr);
 		series->push_back(timer);
 	}
 

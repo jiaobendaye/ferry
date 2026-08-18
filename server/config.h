@@ -19,6 +19,16 @@ struct ServerConfig
 	int acl_poll_interval_sec = 5;
 	int max_connections = 2000;
 
+	/* Admission gates; each 0 => gate disabled. Global gates protect
+	   the server (identity-independent caps); per-IP gates divide the
+	   budget fairly among clients. */
+	long long qps_total = 0;				/* whole-server req/s cap */
+	long long qps_per_ip = 0;				/* per-IP req/s quota */
+	int max_inflight = 0;					/* whole-server in-flight cap */
+	int max_inflight_per_ip = 0;			/* per-IP in-flight quota */
+	long long rate_total_bps = 0;			/* whole-server bytes/s cap */
+	int stats_interval_sec = 0;				/* periodic stats line */
+
 	/* Effective threshold: explicit value if set, otherwise cap. */
 	long long threshold() const
 	{

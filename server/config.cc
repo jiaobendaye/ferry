@@ -99,6 +99,18 @@ ServerConfig load_config(const std::string& path)
 			cfg.acl_poll_interval_sec = (int)parse_range(key, value, 1, 3600);
 		else if (key == "max_connections")
 			cfg.max_connections = (int)parse_range(key, value, 1, 10000000);
+		else if (key == "qps_total")
+			cfg.qps_total = parse_range(key, value, 0, 1LL << 40);
+		else if (key == "qps_per_ip")
+			cfg.qps_per_ip = parse_range(key, value, 0, 1LL << 40);
+		else if (key == "max_inflight")
+			cfg.max_inflight = (int)parse_range(key, value, 0, 10000000);
+		else if (key == "max_inflight_per_ip")
+			cfg.max_inflight_per_ip = (int)parse_range(key, value, 0, 10000000);
+		else if (key == "rate_total_bps")
+			cfg.rate_total_bps = parse_range(key, value, 0, 1LL << 40);
+		else if (key == "stats_interval_sec")
+			cfg.stats_interval_sec = (int)parse_range(key, value, 0, 86400);
 		else
 			fprintf(stderr, "config: %s:%d: unknown key '%s' ignored\n",
 					path.c_str(), lineno, key.c_str());
