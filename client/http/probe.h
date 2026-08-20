@@ -1,5 +1,5 @@
-#ifndef WF_PROBE_H
-#define WF_PROBE_H
+#ifndef FERRY_PROBE_H
+#define FERRY_PROBE_H
 
 #include <string>
 
@@ -55,4 +55,4 @@ ProbeDecision decide_mode(const HeadResult& head, const ProbeResult& probe,
 
 } // namespace ferry
 
-#endif // WF_PROBE_H
+#endif // FERRY_PROBE_H

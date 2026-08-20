@@ -1,5 +1,5 @@
-#ifndef WF_RANGE_H
-#define WF_RANGE_H
+#ifndef FERRY_RANGE_H
+#define FERRY_RANGE_H
 
 #include <string>
 
@@ -34,4 +34,4 @@ RangeDecision decide_range(const std::string& range_header,
 
 } // namespace ferry
 
-#endif // WF_RANGE_H
+#endif // FERRY_RANGE_H

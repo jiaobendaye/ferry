@@ -1,5 +1,5 @@
-#ifndef WF_TOKEN_BUCKET_H
-#define WF_TOKEN_BUCKET_H
+#ifndef FERRY_TOKEN_BUCKET_H
+#define FERRY_TOKEN_BUCKET_H
 
 #include <chrono>
 #include <functional>
@@ -61,4 +61,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_TOKEN_BUCKET_H
+#endif // FERRY_TOKEN_BUCKET_H

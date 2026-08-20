@@ -1,5 +1,5 @@
-#ifndef WF_STATS_H
-#define WF_STATS_H
+#ifndef FERRY_STATS_H
+#define FERRY_STATS_H
 
 #include <array>
 #include <atomic>
@@ -99,4 +99,4 @@ std::string format_stats_line(const Stats::Snapshot& cur,
 
 } // namespace ferry
 
-#endif // WF_STATS_H
+#endif // FERRY_STATS_H

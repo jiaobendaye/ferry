@@ -1,5 +1,5 @@
-#ifndef WF_CLIENT_IP_H
-#define WF_CLIENT_IP_H
+#ifndef FERRY_CLIENT_IP_H
+#define FERRY_CLIENT_IP_H
 
 #include <netinet/in.h>
 #include <string>
@@ -43,4 +43,4 @@ bool resolve_client_ip(const std::string& xff, int trust_hops,
 
 } // namespace ferry
 
-#endif // WF_CLIENT_IP_H
+#endif // FERRY_CLIENT_IP_H

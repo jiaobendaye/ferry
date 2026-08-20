@@ -1,5 +1,5 @@
-#ifndef WF_ACL_H
-#define WF_ACL_H
+#ifndef FERRY_ACL_H
+#define FERRY_ACL_H
 
 #include <ctime>
 #include <memory>
@@ -73,4 +73,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_ACL_H
+#endif // FERRY_ACL_H

@@ -1,5 +1,5 @@
-#ifndef WF_VERIFY_H
-#define WF_VERIFY_H
+#ifndef FERRY_VERIFY_H
+#define FERRY_VERIFY_H
 
 #include <string>
 
@@ -25,4 +25,4 @@ bool checksum_spec_matches(const std::string& spec,
 
 } // namespace ferry
 
-#endif // WF_VERIFY_H
+#endif // FERRY_VERIFY_H

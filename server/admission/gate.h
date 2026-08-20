@@ -1,5 +1,5 @@
-#ifndef WF_GATE_H
-#define WF_GATE_H
+#ifndef FERRY_GATE_H
+#define FERRY_GATE_H
 
 #include <chrono>
 #include <functional>
@@ -119,4 +119,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_GATE_H
+#endif // FERRY_GATE_H

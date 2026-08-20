@@ -1,5 +1,5 @@
-#ifndef WF_CONCURRENCY_LIMITER_H
-#define WF_CONCURRENCY_LIMITER_H
+#ifndef FERRY_CONCURRENCY_LIMITER_H
+#define FERRY_CONCURRENCY_LIMITER_H
 
 #include <atomic>
 #include <mutex>
@@ -54,4 +54,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_CONCURRENCY_LIMITER_H
+#endif // FERRY_CONCURRENCY_LIMITER_H

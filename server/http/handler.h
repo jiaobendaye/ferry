@@ -1,5 +1,5 @@
-#ifndef WF_HANDLER_H
-#define WF_HANDLER_H
+#ifndef FERRY_HANDLER_H
+#define FERRY_HANDLER_H
 
 #include <memory>
 #include <string>
@@ -50,4 +50,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_HANDLER_H
+#endif // FERRY_HANDLER_H

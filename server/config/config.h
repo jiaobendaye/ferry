@@ -1,5 +1,5 @@
-#ifndef WF_CONFIG_H
-#define WF_CONFIG_H
+#ifndef FERRY_CONFIG_H
+#define FERRY_CONFIG_H
 
 #include <string>
 
@@ -54,4 +54,4 @@ ServerConfig load_config(const std::string& path);
 
 } // namespace ferry
 
-#endif // WF_CONFIG_H
+#endif // FERRY_CONFIG_H

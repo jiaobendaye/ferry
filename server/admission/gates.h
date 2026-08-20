@@ -1,5 +1,5 @@
-#ifndef WF_GATES_H
-#define WF_GATES_H
+#ifndef FERRY_GATES_H
+#define FERRY_GATES_H
 
 #include <memory>
 
@@ -97,4 +97,4 @@ GateSetup build_gate_chains(const ServerConfig& cfg);
 
 } // namespace ferry
 
-#endif // WF_GATES_H
+#endif // FERRY_GATES_H

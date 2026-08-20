@@ -1,5 +1,5 @@
-#ifndef WF_RATE_LIMITER_H
-#define WF_RATE_LIMITER_H
+#ifndef FERRY_RATE_LIMITER_H
+#define FERRY_RATE_LIMITER_H
 
 #include <mutex>
 #include <string>
@@ -67,4 +67,4 @@ private:
 
 } // namespace ferry
 
-#endif // WF_RATE_LIMITER_H
+#endif // FERRY_RATE_LIMITER_H
