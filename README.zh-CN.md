@@ -34,6 +34,11 @@
 服务端源码位于 `server/`，客户端源码位于 `client/`（没有共享库 ——
 两者互为对方 Range 逻辑的镜像）。
 
+源码按领域组织：服务端分为 `access/`、`admission/`、`config/`、`file/`、
+`http/` 和 `observability/`，客户端分为 `download/`、`http/`、`integrity/`、
+`resume/` 和 `ui/`；两端的可执行程序入口均位于各自的 `app/`。`tests/unit/`
+和 `tests/integration/` 先按 server/client、再按对应源码领域镜像组织。
+
 ## 客户端（ferry-client）
 
 多线程分块下载器：将文件切成固定大小的块（默认 8 MiB），

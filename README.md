@@ -37,6 +37,13 @@ Features:
 Server source lives in `server/`, client source in `client/` (no shared
 library — the two are mirrors of each other's Range logic).
 
+Source is grouped by domain. The server uses `access/`, `admission/`,
+`config/`, `file/`, `http/`, and `observability/`; the client uses
+`download/`, `http/`, `integrity/`, `resume/`, and `ui/`. Executable entry
+points live in each side's `app/` directory. `tests/unit/` and
+`tests/integration/` mirror server/client and the corresponding source
+domains.
+
 ## Client (ferry-client)
 
 Multi-threaded chunked downloader: splits the file into fixed chunks
