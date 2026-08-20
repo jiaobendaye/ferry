@@ -28,10 +28,11 @@ bool uri_to_safe_path(const std::string& root, const char *uri,
  *   -> path safety -> stat -> HEAD shortcut -> If-Range -> Range
  *      decision (cap/threshold)
  *   -> post-chain gates (bandwidth: global then per-IP)
- *   -> timer (composed shaping delay) -> pread series
+ *   -> timer (composed shaping delay) -> configured file body path:
+ *      async pread (default) or mmap-backed nocopy body (experimental)
  *
  * Every request gets a unified completion callback (all paths, sync and
- * async) that releases gate resources, frees file buffers, and records
+ * async) that releases gate resources, frees/unmaps file bodies, and records
  * the final status into Stats.
  */
 class Handler

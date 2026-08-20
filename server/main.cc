@@ -175,12 +175,14 @@ int main(int argc, char *argv[])
 	arm_periodic(stats_timer);
 
 	fprintf(stderr,
-			"ferry-server listening: port=%u root=%s cap=%lld threshold=%lld "
+			"ferry-server listening: port=%u root=%s file_body=%s "
+			"cap=%lld threshold=%lld "
 			"rate=%lld B/s rate_total=%lld B/s max_wait=%ds trust_hops=%d "
 			"acl=%s(%zu black/%zu white) max_connections=%d "
 			"qps_total=%lld qps_per_ip=%lld max_inflight=%d "
 			"max_inflight_per_ip=%d stats_interval=%ds\n",
-			cfg.port, cfg.root.c_str(), cfg.cap_bytes, cfg.threshold(),
+			cfg.port, cfg.root.c_str(), file_body_mode_name(cfg.file_body_mode),
+			cfg.cap_bytes, cfg.threshold(),
 			cfg.rate_bytes_per_sec, cfg.rate_total_bps, cfg.max_wait_sec,
 			cfg.trust_hops,
 			cfg.acl_file.empty() ? "off" : cfg.acl_file.c_str(),

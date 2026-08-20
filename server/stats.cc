@@ -54,6 +54,31 @@ void Stats::inflight_dec()
 	this->inflight_.fetch_sub(1, std::memory_order_acq_rel);
 }
 
+void Stats::mmap_open(long long bytes)
+{
+	this->mmap_responses_.fetch_add(1, std::memory_order_relaxed);
+	this->mmap_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+	long long active = this->mmap_active_bytes_.fetch_add(
+						bytes, std::memory_order_acq_rel) + bytes;
+	long long peak = this->mmap_active_peak_.load(std::memory_order_relaxed);
+
+	while (active > peak &&
+		   !this->mmap_active_peak_.compare_exchange_weak(
+					peak, active, std::memory_order_relaxed))
+	{
+	}
+}
+
+void Stats::mmap_close(long long bytes)
+{
+	this->mmap_active_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
+}
+
+void Stats::mmap_fallback()
+{
+	this->mmap_fallbacks_.fetch_add(1, std::memory_order_relaxed);
+}
+
 Stats::Snapshot Stats::snapshot() const
 {
 	Snapshot s;
@@ -68,6 +93,12 @@ Stats::Snapshot Stats::snapshot() const
 	s.bytes_served = this->bytes_served_.load(std::memory_order_relaxed);
 	s.inflight = this->inflight_.load(std::memory_order_relaxed);
 	s.inflight_peak = this->inflight_peak_.load(std::memory_order_relaxed);
+	s.mmap_responses = this->mmap_responses_.load(std::memory_order_relaxed);
+	s.mmap_bytes = this->mmap_bytes_.load(std::memory_order_relaxed);
+	s.mmap_active_bytes = this->mmap_active_bytes_.load(
+											std::memory_order_relaxed);
+	s.mmap_active_peak = this->mmap_active_peak_.load(std::memory_order_relaxed);
+	s.mmap_fallbacks = this->mmap_fallbacks_.load(std::memory_order_relaxed);
 	return s;
 }
 
@@ -75,13 +106,15 @@ std::string format_stats_line(const Stats::Snapshot& cur,
 							  const Stats::Snapshot& prev,
 							  long long qps_buckets, long long bw_buckets)
 {
-	char buf[512];
+	char buf[768];
 
 	snprintf(buf, sizeof(buf),
 		"[stats] reqs=%lld(+%lld) 2xx=%lld 404=%lld 4xx=%lld 5xx=%lld "
 		"rej(qps_total)=%lld rej(inflight)=%lld rej(qps_per_ip)=%lld "
 		"rej(inflight_per_ip)=%lld rej(rate_total)=%lld rej(rate_per_ip)=%lld "
-		"inflight=%d peak=%d buckets(qps)=%lld buckets(bw)=%lld served=%lld",
+		"inflight=%d peak=%d buckets(qps)=%lld buckets(bw)=%lld served=%lld "
+		"mmap_resps=%lld mmap_bytes=%lld mmap_active=%lld mmap_peak=%lld "
+		"mmap_fallbacks=%lld",
 		cur.requests, cur.requests - prev.requests,
 		cur.status_2xx, cur.status_404, cur.status_4xx_other, cur.status_5xx,
 		cur.gate_rejects[Stats::GATE_QPS_TOTAL],
@@ -91,8 +124,9 @@ std::string format_stats_line(const Stats::Snapshot& cur,
 		cur.gate_rejects[Stats::GATE_RATE_TOTAL],
 		cur.gate_rejects[Stats::GATE_RATE_PER_IP],
 		cur.inflight, cur.inflight_peak,
-		qps_buckets, bw_buckets,
-		cur.bytes_served);
+		qps_buckets, bw_buckets, cur.bytes_served,
+		cur.mmap_responses, cur.mmap_bytes, cur.mmap_active_bytes,
+		cur.mmap_active_peak, cur.mmap_fallbacks);
 	return buf;
 }
 

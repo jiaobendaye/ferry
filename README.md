@@ -104,6 +104,7 @@ Flat `key = value` file; `#` comments. Invalid values fail startup loudly.
 |---|---|---|
 | `port` | `8080` | Listen port |
 | `root` | `.` | Directory whose files are served |
+| `file_body_mode` | `pread` | File body path: stable `pread`, or experimental `mmap` for A/B measurement |
 | `cap_bytes` | `8388608` | Max bytes per response (range truncation cap) |
 | `size_threshold_bytes` | = `cap_bytes` | Non-Range requests above this → `413` |
 | `rate_bytes_per_sec` | `0` (off) | Per-IP bandwidth limit |
@@ -148,11 +149,20 @@ the header gains nothing. With N chained trusted proxies set
 
 ### Memory sizing
 
-Responses are buffered before sending (Workflow's server model), so peak
-response-buffer memory is bounded by `max_inflight × cap_bytes` when
-`max_inflight` is configured. For example, 128 × 8 MiB is approximately
-1 GiB. With that gate off, use `max_connections × cap_bytes` as the
-conservative sizing bound. Tune the cap and gate together for the host.
+Responses are buffered before sending (Workflow's server model). In the
+default `pread` mode, peak anonymous response-buffer memory is bounded by
+`max_inflight × cap_bytes` when `max_inflight` is configured. For example,
+128 × 8 MiB is approximately 1 GiB. With that gate off, use
+`max_connections × cap_bytes` as the conservative sizing bound.
+
+`file_body_mode = mmap` is an experimental measurement path: it maps only
+the selected response range and removes the anonymous `malloc + pread`
+buffer, but Workflow still writes from memory to the socket, so this is not
+`sendfile` zero-copy. Cold mapped pages can fault in the communication path,
+and truncating a mapped file while it is being sent can raise `SIGBUS`; use it
+only for immutable files until the A/B workload proves a benefit. Stats expose
+`mmap_resps`, `mmap_bytes`, `mmap_active`, `mmap_peak`, and
+`mmap_fallbacks` so a benchmark cannot silently measure the fallback path.
 
 ### Protection versus fairness
 
@@ -201,6 +211,7 @@ xmake run integration-test   # L2: server suite + client closed loop (ferry hand
 tests/system/run_l3.sh       # L3 server: curl-driven (content-verified ranges, hot reload, XFF)
 tests/system/run_client_l3.sh # L3 client: real binaries (SIGKILL-resume, checksum gates,
                              #     python http.server interop, Range-less fallback)
+tests/stress/run_stress_mmap.sh # opt-in hot-cache pread/mmap A/B benchmark
 ```
 
 AddressSanitizer run (catches nocopy-buffer lifetime bugs):

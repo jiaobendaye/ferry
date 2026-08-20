@@ -44,6 +44,12 @@ public:
 	void inflight_inc();
 	void inflight_dec();
 
+	/* Experimental mmap body-path observability. `mmap_open` is called
+	   only after a mapping succeeds; fallback records failed mmap attempts. */
+	void mmap_open(long long bytes);
+	void mmap_close(long long bytes);
+	void mmap_fallback();
+
 	struct Snapshot
 	{
 		long long requests = 0;
@@ -55,6 +61,11 @@ public:
 		long long bytes_served = 0;
 		int inflight = 0;
 		int inflight_peak = 0;
+		long long mmap_responses = 0;
+		long long mmap_bytes = 0;
+		long long mmap_active_bytes = 0;
+		long long mmap_active_peak = 0;
+		long long mmap_fallbacks = 0;
 	};
 
 	Snapshot snapshot() const;
@@ -69,6 +80,11 @@ private:
 	std::atomic<long long> bytes_served_{0};
 	std::atomic<int> inflight_{0};
 	std::atomic<int> inflight_peak_{0};
+	std::atomic<long long> mmap_responses_{0};
+	std::atomic<long long> mmap_bytes_{0};
+	std::atomic<long long> mmap_active_bytes_{0};
+	std::atomic<long long> mmap_active_peak_{0};
+	std::atomic<long long> mmap_fallbacks_{0};
 };
 
 /*

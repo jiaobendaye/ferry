@@ -95,6 +95,7 @@ xmake run ferry-server config/server.conf
 |---|---|---|
 | `port` | `8080` | 监听端口 |
 | `root` | `.` | 提供文件服务的目录 |
+| `file_body_mode` | `pread` | 文件响应路径：稳定的 `pread`，或用于 A/B 测量的实验性 `mmap` |
 | `cap_bytes` | `8388608` | 每个响应的最大字节数（range 截断上限） |
 | `size_threshold_bytes` | = `cap_bytes` | 非 Range 请求超过该值 → `413` |
 | `rate_bytes_per_sec` | `0`（关闭） | 按 IP 的带宽限制 |
@@ -136,11 +137,17 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
 ### 内存规划
 
-响应在发送前会整体缓冲（Workflow 的服务端模型）。配置
-`max_inflight` 后，响应缓冲的内存峰值严格受
+响应在发送前会整体缓冲（Workflow 的服务端模型）。默认 `pread` 模式下，
+配置 `max_inflight` 后，匿名响应缓冲的内存峰值受
 `max_inflight × cap_bytes` 限制；例如 128 × 8 MiB 约为 1 GiB。
 该门禁关闭时，可用 `max_connections × cap_bytes` 作为保守估算。
-请根据机器容量一并调优响应上限和门禁。
+
+`file_body_mode = mmap` 是用于测量的实验路径：它只映射本次响应区间，
+消除匿名 `malloc + pread` 缓冲，但 Workflow 仍从内存写入 socket，因此不
+是 `sendfile` 零拷贝。冷映射页可能在通信路径触发缺页；发送期间截断文件
+还可能引发 `SIGBUS`，验证充分前只应用于不可变文件。统计行中的
+`mmap_resps`、`mmap_bytes`、`mmap_active`、`mmap_peak` 和
+`mmap_fallbacks` 可用于识别是否真正走了 mmap，以及是否发生静默回退。
 
 ### 保护与公平性
 
@@ -187,6 +194,7 @@ xmake run integration-test   # L2：服务端套件 + 客户端闭环（ferry ha
 tests/system/run_l3.sh       # L3 服务端：curl 驱动（内容校验的 range、热加载、XFF）
 tests/system/run_client_l3.sh # L3 客户端：真实二进制（SIGKILL 后续传、校验和门禁、
                              #     python http.server 互操作、无 Range 回退）
+tests/stress/run_stress_mmap.sh # 可选：热缓存 pread/mmap A/B 压测
 ```
 
 AddressSanitizer 运行方式（用于捕捉 nocopy-buffer 生命周期类 bug）：

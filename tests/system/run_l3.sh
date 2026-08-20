@@ -8,6 +8,7 @@ WORK=$(mktemp -d /tmp/ferry_l3.XXXXXX)
 PORT=18091
 CAP=$((8 * 1024 * 1024))
 TOTAL=$((64 * 1024 * 1024))
+FILE_BODY_MODE="${FILE_BODY_MODE:-pread}"
 BASE="http://127.0.0.1:$PORT"
 PASS=0; FAIL=0
 
@@ -41,6 +42,7 @@ printf '# empty\n' > "$WORK/acl.conf"
 cat > "$WORK/server.conf" <<EOF
 port = $PORT
 root = $WORK/files
+file_body_mode = $FILE_BODY_MODE
 cap_bytes = $CAP
 rate_bytes_per_sec = 0
 acl_file = $WORK/acl.conf

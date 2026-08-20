@@ -83,6 +83,27 @@ TEST(Stats, InflightGaugeAndPeak)
 	EXPECT_EQ(st.snapshot().inflight, 0);
 }
 
+TEST(Stats, MmapGaugePeakAndFallback)
+{
+	ferry::Stats st;
+
+	st.mmap_open(4096);
+	st.mmap_open(8192);
+	st.mmap_fallback();
+	auto active = st.snapshot();
+	EXPECT_EQ(active.mmap_responses, 2);
+	EXPECT_EQ(active.mmap_bytes, 12288);
+	EXPECT_EQ(active.mmap_active_bytes, 12288);
+	EXPECT_EQ(active.mmap_active_peak, 12288);
+	EXPECT_EQ(active.mmap_fallbacks, 1);
+
+	st.mmap_close(4096);
+	st.mmap_close(8192);
+	auto closed = st.snapshot();
+	EXPECT_EQ(closed.mmap_active_bytes, 0);
+	EXPECT_EQ(closed.mmap_active_peak, 12288);
+}
+
 TEST(Stats, FormatLineContainsKeyFieldsAndDeltas)
 {
 	ferry::Stats st;
@@ -101,6 +122,8 @@ TEST(Stats, FormatLineContainsKeyFieldsAndDeltas)
 	EXPECT_NE(line.find("buckets(bw)=4"), std::string::npos);
 	EXPECT_NE(line.find("served=1000"), std::string::npos);
 	EXPECT_NE(line.find("rej(qps_total)=0"), std::string::npos);
+	EXPECT_NE(line.find("mmap_resps=0"), std::string::npos);
+	EXPECT_NE(line.find("mmap_fallbacks=0"), std::string::npos);
 	EXPECT_EQ(line.find('\n'), std::string::npos);	/* single line */
 
 	/* second interval: delta only */

@@ -22,6 +22,7 @@ from collections import Counter
 
 
 def one_request(host, port, path, timeout, headers=None):
+    t0 = time.monotonic()
     try:
         conn = http.client.HTTPConnection(host, port, timeout=timeout)
         conn.request("GET", path, headers=headers or {})
@@ -29,9 +30,9 @@ def one_request(host, port, path, timeout, headers=None):
         body = resp.read()
         status = str(resp.status)
         conn.close()
-        return status, len(body)
+        return status, len(body), (time.monotonic() - t0) * 1000.0
     except Exception:
-        return None, 0
+        return None, 0, (time.monotonic() - t0) * 1000.0
 
 
 class XffGen:
@@ -59,8 +60,9 @@ class Tally:
         self.errors = 0
         self.bytes = 0
         self.total = 0
+        self.latencies_ms = []
 
-    def record(self, status, size):
+    def record(self, status, size, latency_ms):
         with self.lock:
             self.total += 1
             if status is None:
@@ -68,6 +70,7 @@ class Tally:
             else:
                 self.statuses[status] += 1
                 self.bytes += size
+            self.latencies_ms.append(latency_ms)
 
 
 def run_rate(args, tally):
@@ -79,9 +82,11 @@ def run_rate(args, tally):
     xff = XffGen(args.xff_prefix)
 
     def fire():
-        status, size = one_request(args.host, args.port, args.path,
-                                   args.timeout, xff.headers())
-        tally.record(status, size)
+        headers = dict(args.headers)
+        headers.update(xff.headers())
+        status, size, latency_ms = one_request(
+            args.host, args.port, args.path, args.timeout, headers)
+        tally.record(status, size, latency_ms)
 
     while time.monotonic() < deadline:
         now = time.monotonic()
@@ -105,9 +110,11 @@ def run_closed(args, tally):
 
     def work():
         while time.monotonic() < deadline:
-            status, size = one_request(args.host, args.port, args.path,
-                                       args.timeout, xff.headers())
-            tally.record(status, size)
+            headers = dict(args.headers)
+            headers.update(xff.headers())
+            status, size, latency_ms = one_request(
+                args.host, args.port, args.path, args.timeout, headers)
+            tally.record(status, size, latency_ms)
 
     threads = [threading.Thread(target=work) for _ in range(args.concurrency)]
     for t in threads:
@@ -129,7 +136,18 @@ def main():
     p.add_argument("--xff-prefix", default=None,
                    help="forge a unique X-Forwarded-For per request "
                         "(prefix.<i/250>.<i mod 250>), e.g. 10.51")
+    p.add_argument("--header", action="append", default=[],
+                   metavar="NAME:VALUE",
+                   help="additional request header (repeatable)")
     args = p.parse_args()
+    args.headers = {}
+    for item in args.header:
+        if ":" not in item:
+            p.error(f"invalid --header {item!r}; expected NAME:VALUE")
+        name, value = item.split(":", 1)
+        if not name.strip():
+            p.error("header name must not be empty")
+        args.headers[name.strip()] = value.strip()
 
     tally = Tally()
     t0 = time.monotonic()
@@ -139,12 +157,26 @@ def main():
         run_closed(args, tally)
     elapsed = time.monotonic() - t0
 
+    latencies = sorted(tally.latencies_ms)
+
+    def percentile(q):
+        if not latencies:
+            return 0.0
+        index = round((len(latencies) - 1) * q)
+        return round(latencies[index], 3)
+
     json.dump({
         "total": tally.total,
         "statuses": dict(tally.statuses),
         "transport_errors": tally.errors,
         "elapsed_s": round(elapsed, 3),
         "bytes": tally.bytes,
+        "latency_ms": {
+            "p50": percentile(0.50),
+            "p95": percentile(0.95),
+            "p99": percentile(0.99),
+            "max": round(latencies[-1], 3) if latencies else 0.0,
+        },
     }, sys.stdout)
     print()
 

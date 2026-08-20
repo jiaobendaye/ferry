@@ -163,6 +163,7 @@ protected:
 		write_file(this->root + "/small.txt", 1000);			/* ≤ cap */
 		write_file(this->root + "/big.bin", 3 * 1024 * 1024);	/* > cap */
 		write_file(this->root + "/nested/data.txt", 200);
+		write_file(this->root + "/empty.bin", 0);
 
 		this->cfg.port = 0;					/* unused: harness picks */
 		this->cfg.root = this->root;
@@ -222,6 +223,45 @@ TEST_F(FileFixture, RangeExact206)
 	EXPECT_EQ(r.body.size(), 100u);
 	EXPECT_EQ((unsigned char)r.body[0], 0u);
 	EXPECT_EQ((unsigned char)r.body[99], 99u);
+}
+
+TEST_F(FileFixture, MmapUnalignedRange206)
+{
+	this->cfg.file_body_mode = ferry::FileBodyMode::MMAP;
+	TestServer s(this->cfg, nullptr);
+	auto r = s.get("/big.bin", {{"Range", "bytes=123-1000122"}});
+
+	ASSERT_EQ(r.task_state, WFT_STATE_SUCCESS);
+	EXPECT_EQ(r.status, "206");
+	EXPECT_EQ(r.headers["content-range"], "bytes 123-1000122/3145728");
+	ASSERT_EQ(r.body.size(), 1000000u);
+	EXPECT_EQ((unsigned char)r.body.front(), (unsigned char)(123 % 251));
+	EXPECT_EQ((unsigned char)r.body.back(), (unsigned char)(1000122 % 251));
+	auto stats = s.stats->snapshot();
+	EXPECT_EQ(stats.mmap_responses, 1);
+	EXPECT_EQ(stats.mmap_bytes, 1000000);
+	EXPECT_EQ(stats.mmap_active_bytes, 0);
+	EXPECT_EQ(stats.mmap_fallbacks, 0);
+}
+
+TEST_F(FileFixture, MmapWholeAndEmptyFiles200)
+{
+	this->cfg.file_body_mode = ferry::FileBodyMode::MMAP;
+	TestServer s(this->cfg, nullptr);
+
+	auto whole = s.get("/small.txt");
+	EXPECT_EQ(whole.status, "200");
+	EXPECT_EQ(whole.body.size(), 1000u);
+
+	auto empty = s.get("/empty.bin");
+	EXPECT_EQ(empty.status, "200");
+	EXPECT_EQ(empty.headers["content-length"], "0");
+	EXPECT_TRUE(empty.body.empty());
+
+	auto stats = s.stats->snapshot();
+	EXPECT_EQ(stats.mmap_responses, 1); /* zero-length body needs no mapping */
+	EXPECT_EQ(stats.mmap_bytes, 1000);
+	EXPECT_EQ(stats.mmap_active_bytes, 0);
 }
 
 TEST_F(FileFixture, OpenEndedRangeCapped)

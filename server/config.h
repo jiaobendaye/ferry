@@ -6,6 +6,14 @@
 namespace ferry
 {
 
+enum class FileBodyMode
+{
+	PREAD,
+	MMAP,
+};
+
+const char *file_body_mode_name(FileBodyMode mode);
+
 struct ServerConfig
 {
 	unsigned short port = 8080;
@@ -18,6 +26,7 @@ struct ServerConfig
 	std::string acl_file;					/* empty => ACL disabled */
 	int acl_poll_interval_sec = 5;
 	int max_connections = 2000;
+	FileBodyMode file_body_mode = FileBodyMode::PREAD;
 
 	/* Admission gates; each 0 => gate disabled. Global gates protect
 	   the server (identity-independent caps); per-IP gates divide the

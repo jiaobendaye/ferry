@@ -39,6 +39,7 @@ TEST(Config, ParsesAllKeys)
 		"acl_file = /etc/acl.conf\n"
 		"acl_poll_interval_sec = 3\n"
 		"max_connections = 500\n"
+		"file_body_mode = mmap\n"
 		"qps_total = 1000\n"
 		"qps_per_ip = 20\n"
 		"max_inflight = 500\n"
@@ -58,6 +59,8 @@ TEST(Config, ParsesAllKeys)
 	EXPECT_EQ(cfg.acl_file, "/etc/acl.conf");
 	EXPECT_EQ(cfg.acl_poll_interval_sec, 3);
 	EXPECT_EQ(cfg.max_connections, 500);
+	EXPECT_EQ(cfg.file_body_mode, ferry::FileBodyMode::MMAP);
+	EXPECT_STREQ(ferry::file_body_mode_name(cfg.file_body_mode), "mmap");
 	EXPECT_EQ(cfg.qps_total, 1000);
 	EXPECT_EQ(cfg.qps_per_ip, 20);
 	EXPECT_EQ(cfg.max_inflight, 500);
@@ -90,6 +93,7 @@ TEST(Config, DefaultsAndComments)
 	EXPECT_EQ(cfg.max_inflight_per_ip, 0);
 	EXPECT_EQ(cfg.rate_total_bps, 0);
 	EXPECT_EQ(cfg.stats_interval_sec, 0);
+	EXPECT_EQ(cfg.file_body_mode, ferry::FileBodyMode::PREAD);
 }
 
 TEST(Config, UnknownKeyIsTolerated)
@@ -127,6 +131,8 @@ TEST(Config, InvalidValuesThrow)
 		"max_inflight_per_ip = -2",
 		"rate_total_bps = -100",
 		"stats_interval_sec = -30",
+		"file_body_mode = sendfile",
+		"file_body_mode = MMAP",
 	};
 
 	for (const char *content : bad)

@@ -10,6 +10,7 @@ by the normal test targets — run them manually when you want numbers.
 | `run_stress_client.sh` | `ferry-client -j 32` completes a hash-verified download while one IP's gates push back most workers |
 | `run_stress_soak.sh` | 10-minute shaping-backlog soak: stats lines continuous, inflight bounded, no transport errors |
 | `run_stress_overhead.sh` | throughput gates-off vs gates-on — feeds the single-mutex-vs-sharding decision (design D12) |
+| `run_stress_mmap.sh` | hot-cache A/B of pread vs mmap: MiB/s, CPU/GiB, latency, faults, RSS/RssAnon, and silent-fallback detection |
 
 ## Usage
 
@@ -18,6 +19,8 @@ xmake                                   # release binaries required
 tests/stress/run_stress_qps.sh
 SOAK_SECONDS=60 tests/stress/run_stress_soak.sh   # short smoke soak
 STRESS_SECONDS=20 QPS_TOTAL=500 tests/stress/run_stress_qps.sh
+STRESS_SECONDS=10 CONCURRENCY=32 tests/stress/run_stress_mmap.sh
+STRESS_SECONDS=3 CONCURRENCY=16 REPETITIONS=3 tests/stress/run_stress_mmap.sh
 ```
 
 Knobs are environment variables: `STRESS_SECONDS` (wall time),

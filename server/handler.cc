@@ -1,8 +1,10 @@
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -178,13 +180,37 @@ static bool if_range_matches(const std::string& if_range, time_t mtime)
 struct FileContext
 {
 	HttpResponse *resp;
-	void *buf;
+	void *storage = nullptr;			/* heap buffer or page-aligned mapping */
+	size_t storage_len = 0;			/* allocation/mapping length */
+	bool mapped = false;
 	long long offset;
 	long long file_size;
 	time_t mtime;
 	bool partial;					/* 206 vs 200 */
 	long long served = 0;			/* file-content bytes in the response */
 };
+
+static void set_file_response(FileContext *ctx, const void *body, size_t len)
+{
+	HttpResponse *resp = ctx->resp;
+
+	if (ctx->partial)
+	{
+		char cr[128];
+		snprintf(cr, sizeof(cr), "bytes %lld-%lld/%lld",
+				 ctx->offset, ctx->offset + (long long)len - 1, ctx->file_size);
+		resp->set_status_code("206");
+		resp->set_header_pair("Content-Range", cr);
+	}
+	else
+		resp->set_status_code("200");
+
+	resp->set_header_pair("Last-Modified", http_date(ctx->mtime));
+	resp->set_header_pair("Content-Length", std::to_string(len));
+	if (len > 0)
+		resp->append_output_body_nocopy(body, len);
+	ctx->served = (long long)len;
+}
 
 static void pread_callback(WFFileIOTask *task)
 {
@@ -202,27 +228,13 @@ static void pread_callback(WFFileIOTask *task)
 		return;
 	}
 
-	if (ctx->partial)
-	{
-		char cr[128];
-		snprintf(cr, sizeof(cr), "bytes %lld-%lld/%lld",
-				 ctx->offset, ctx->offset + ret - 1, ctx->file_size);
-		resp->set_status_code("206");
-		resp->set_header_pair("Content-Range", cr);
-	}
-	else
-		resp->set_status_code("200");
-
-	resp->set_header_pair("Last-Modified", http_date(ctx->mtime));
-	resp->set_header_pair("Content-Length", std::to_string(ret));
-	resp->append_output_body_nocopy(args->buf, ret);
-	ctx->served = ret;
+	set_file_response(ctx, args->buf, (size_t)ret);
 }
 
 /*
  * Per-request state anchored to server_task->user_data; the unified
  * completion callback is the single point where gate resources are
- * released, file buffers freed, and the final status recorded.
+ * released, file bodies freed/unmapped, and the final status recorded.
  */
 struct RequestState
 {
@@ -243,7 +255,14 @@ static void on_request_complete(WFHttpTask *task)
 
 	if (rs->fc)
 	{
-		free(rs->fc->buf);
+		if (rs->fc->mapped)
+		{
+			munmap(rs->fc->storage, rs->fc->storage_len);
+			if (rs->stats)
+				rs->stats->mmap_close(rs->fc->served);
+		}
+		else
+			free(rs->fc->storage);
 		delete rs->fc;
 	}
 
@@ -420,49 +439,120 @@ void Handler::process(WFHttpTask *server_task)
 	}
 	rs->releases.append(std::move(post.releases));
 
-	/* ---- async file read ---- */
-	int fd = open(path.c_str(), O_RDONLY);
+	/* ---- file body setup ---- */
+	int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 	{
 		reply_error(resp, "404", "404 Not Found");
 		return;
 	}
 
-	void *buf = malloc(d.length > 0 ? d.length : 1);
-	if (!buf)
+	/* Bind the earlier Range decision to the same file description used by
+	   pread/mmap. This closes the stat/open replacement window; mmap mode
+	   still requires files not to be truncated after this point. */
+	struct stat opened_st;
+	if (fstat(fd, &opened_st) < 0 || !S_ISREG(opened_st.st_mode) ||
+		opened_st.st_dev != st.st_dev || opened_st.st_ino != st.st_ino ||
+		opened_st.st_size != st.st_size ||
+		opened_st.st_mtim.tv_sec != st.st_mtim.tv_sec ||
+		opened_st.st_mtim.tv_nsec != st.st_mtim.tv_nsec)
 	{
 		close(fd);
-		reply_error(resp, "503", "503 Internal Server Error");
+		reply_error(resp, "503", "503 File Changed During Request");
 		return;
 	}
 
 	FileContext *ctx = new FileContext();
 	ctx->resp = resp;
-	ctx->buf = buf;
 	ctx->offset = d.offset;
 	ctx->file_size = st.st_size;
 	ctx->mtime = st.st_mtime;
 	ctx->partial = (d.status == 206);
 	rs->fc = ctx;
 
-	WFFileIOTask *pread_task = WFTaskFactory::create_pread_task(
-						fd, buf, (size_t)d.length, (off_t)d.offset,
-						pread_callback);
-	pread_task->user_data = ctx;
-
 	SeriesWork *series = series_of(server_task);
 
 	/* composed shaping delay: max within each chain, sum across the
 	   pre/post split (both waits must elapse) */
 	long long total_ms = pre.delay.count() + post.delay.count();
-	if (total_ms > 0)
+	auto push_delay = [series, total_ms]() {
+		if (total_ms > 0)
+		{
+			WFTimerTask *timer = WFTaskFactory::create_timer_task(
+							(unsigned int)(total_ms / 1000),
+							(unsigned int)((total_ms % 1000) * 1000000), nullptr);
+			series->push_back(timer);
+		}
+	};
+
+	/* mmap is deliberately opt-in. The mapped pages stay valid until the
+	   server-task completion callback because HttpResponse keeps a nocopy
+	   pointer. A failed/unsupported mapping falls back to the established
+	   asynchronous pread path. */
+	if (this->cfg_.file_body_mode == FileBodyMode::MMAP)
 	{
-		WFTimerTask *timer = WFTaskFactory::create_timer_task(
-						(unsigned int)(total_ms / 1000),
-						(unsigned int)((total_ms % 1000) * 1000000), nullptr);
-		series->push_back(timer);
+		if (d.length == 0)
+		{
+			close(fd);
+			set_file_response(ctx, nullptr, 0);
+			push_delay();
+			return;
+		}
+
+		long page_size = sysconf(_SC_PAGESIZE);
+		off_t map_offset = (off_t)d.offset;
+		size_t delta = 0;
+		bool representable = page_size > 0;
+
+		if (representable)
+		{
+			map_offset -= map_offset % (off_t)page_size;
+			delta = (size_t)((off_t)d.offset - map_offset);
+			representable = (unsigned long long)d.length <=
+								(unsigned long long)SIZE_MAX - delta;
+		}
+
+		if (representable)
+		{
+			size_t map_len = delta + (size_t)d.length;
+			void *mapping = mmap(nullptr, map_len, PROT_READ, MAP_PRIVATE,
+							 fd, map_offset);
+
+			if (mapping != MAP_FAILED)
+			{
+				close(fd);
+				ctx->storage = mapping;
+				ctx->storage_len = map_len;
+				ctx->mapped = true;
+				set_file_response(ctx, (const char *)mapping + delta,
+							  (size_t)d.length);
+				if (this->stats_)
+					this->stats_->mmap_open(d.length);
+				push_delay();
+				return;
+			}
+		}
+
+		if (this->stats_)
+			this->stats_->mmap_fallback();
 	}
 
+	void *buf = malloc(d.length > 0 ? (size_t)d.length : 1);
+	if (!buf)
+	{
+		close(fd);
+		reply_error(resp, "503", "503 Internal Server Error");
+		return;
+	}
+	ctx->storage = buf;
+	ctx->storage_len = d.length > 0 ? (size_t)d.length : 1;
+
+	WFFileIOTask *pread_task = WFTaskFactory::create_pread_task(
+						fd, buf, (size_t)d.length, (off_t)d.offset,
+						pread_callback);
+	pread_task->user_data = ctx;
+
+	push_delay();
 	series->push_back(pread_task);
 }
 

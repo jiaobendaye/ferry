@@ -10,6 +10,11 @@
 namespace ferry
 {
 
+const char *file_body_mode_name(FileBodyMode mode)
+{
+	return mode == FileBodyMode::MMAP ? "mmap" : "pread";
+}
+
 static std::string trim(const std::string& s)
 {
 	size_t b = s.find_first_not_of(" \t\r\n");
@@ -99,6 +104,17 @@ ServerConfig load_config(const std::string& path)
 			cfg.acl_poll_interval_sec = (int)parse_range(key, value, 1, 3600);
 		else if (key == "max_connections")
 			cfg.max_connections = (int)parse_range(key, value, 1, 10000000);
+		else if (key == "file_body_mode")
+		{
+			if (value == "pread")
+				cfg.file_body_mode = FileBodyMode::PREAD;
+			else if (value == "mmap")
+				cfg.file_body_mode = FileBodyMode::MMAP;
+			else
+				throw std::runtime_error(
+					"config: invalid value for 'file_body_mode': \"" + value +
+					"\" (expected 'pread' or 'mmap')");
+		}
 		else if (key == "qps_total")
 			cfg.qps_total = parse_range(key, value, 0, 1LL << 40);
 		else if (key == "qps_per_ip")
