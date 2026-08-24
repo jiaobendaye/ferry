@@ -88,18 +88,22 @@ TEST(Config, ParsesByteQuantitySuffixes)
 	for (const Case& c : cases)
 	{
 		TmpConfig f("cap_bytes = " + std::string(c.value) + "\n" +
+					"size_threshold_bytes = " + c.value + "\n" +
 					"rate_bytes_per_sec = " + c.value + "\n");
 		ferry::ServerConfig cfg = ferry::load_config(f.path());
 		EXPECT_EQ(cfg.cap_bytes, c.expected) << c.value;
+		EXPECT_EQ(cfg.size_threshold_bytes, c.expected) << c.value;
 		EXPECT_EQ(cfg.rate_bytes_per_sec, c.expected) << c.value;
 	}
 }
 
 TEST(Config, ZeroRateWithUnitDisablesLimiting)
 {
-	TmpConfig f("cap_bytes = 1B\nrate_bytes_per_sec = 0MiB\n");
+	TmpConfig f("cap_bytes = 1B\nsize_threshold_bytes = 0MiB\n"
+				"rate_bytes_per_sec = 0MiB\n");
 	ferry::ServerConfig cfg = ferry::load_config(f.path());
 	EXPECT_EQ(cfg.cap_bytes, 1);
+	EXPECT_EQ(cfg.size_threshold_bytes, 0);
 	EXPECT_EQ(cfg.rate_bytes_per_sec, 0);
 }
 
@@ -160,7 +164,10 @@ TEST(Config, InvalidValuesThrow)
 		"rate_bytes_per_sec = 1.5MiB",
 		"rate_bytes_per_sec = 9223372036854775807TiB",
 		"rate_bytes_per_sec = 2TiB",
-		"size_threshold_bytes = 1MiB",
+		"size_threshold_bytes = 1MB",
+		"size_threshold_bytes = 1.5MiB",
+		"size_threshold_bytes = 9223372036854775807TiB",
+		"size_threshold_bytes = 2TiB",
 		"rate_total_bps = 1MiB",
 		"port = 0",
 		"port = 70000",

@@ -100,9 +100,10 @@ xmake run ferry-server config/server.conf
 
 扁平的 `key = value` 格式文件；`#` 为注释。非法值会导致启动时直接报错。
 
-`cap_bytes` 和 `rate_bytes_per_sec` 既可以填写十进制字节数，也可以在整数后
-添加区分大小写的二进制单位 `B`、`KiB`、`MiB`、`GiB` 或 `TiB`；整数与
-单位之间可以有空格。例如 `cap_bytes = 8MiB` 表示单响应上限为 8 MiB，
+`cap_bytes`、`size_threshold_bytes` 和 `rate_bytes_per_sec` 既可以填写十进制
+字节数，也可以在整数后添加区分大小写的二进制单位 `B`、`KiB`、`MiB`、
+`GiB` 或 `TiB`；整数与单位之间可以有空格。例如 `cap_bytes = 8MiB` 和
+`size_threshold_bytes = 16MiB` 分别设置响应上限与非 Range 阈值，
 `rate_bytes_per_sec = 10 MiB` 表示每秒 10 MiB。不支持 `MB` 等十进制单位
 或小数值。
 

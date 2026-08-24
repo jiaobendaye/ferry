@@ -143,7 +143,7 @@ ServerConfig load_config(const std::string& path)
 		else if (key == "cap_bytes")
 			cfg.cap_bytes = parse_byte_range(key, value, 1, 1LL << 40);
 		else if (key == "size_threshold_bytes")
-			cfg.size_threshold_bytes = parse_range(key, value, 0, 1LL << 40);
+			cfg.size_threshold_bytes = parse_byte_range(key, value, 0, 1LL << 40);
 		else if (key == "rate_bytes_per_sec")
 			cfg.rate_bytes_per_sec = parse_byte_range(key, value, 0, 1LL << 40);
 		else if (key == "max_wait_sec")
