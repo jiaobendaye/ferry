@@ -9,7 +9,7 @@ require_bins
 [ -x "$CLIENT_BIN" ] || fail "ferry-client not built ($CLIENT_BIN); run: xmake"
 
 SIZE="${FILE_SIZE:-$((32 * 1024 * 1024))}"
-CHUNK_SIZE="${CHUNK_SIZE:-1048576}"
+CHUNK_SIZE_MIB="${CHUNK_SIZE_MIB:-1}"
 WORK=$(mktemp -d /tmp/ferry_stress_client.XXXXXX)
 PID=""
 trap '[ -z "$PID" ] || stop_server "$PID"; rm -rf "$WORK"' EXIT
@@ -35,7 +35,7 @@ echo "ferry-client -j 32 vs per-IP gates (qps=30, inflight=8, rate=2MiB/s) ..."
 # a larger client chunk would test that separate client bug rather than
 # admission gates.
 set +e
-timeout 300 "$CLIENT_BIN" -j 32 --chunk-size "$CHUNK_SIZE" \
+timeout 300 "$CLIENT_BIN" -j 32 --chunk-size "$CHUNK_SIZE_MIB" \
 	-o "$WORK/out.bin" \
 	--checksum "sha-256=$EXPECTED" \
 	"http://127.0.0.1:$PORT/stress.bin" > "$WORK/client.log" 2>&1

@@ -1,4 +1,5 @@
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -50,6 +51,57 @@ static long long parse_range(const std::string& key, const std::string& value,
 	return v;
 }
 
+/* Parse an unsigned decimal byte quantity with an optional IEC suffix. */
+static long long parse_byte_quantity(const std::string& key,
+								 const std::string& value)
+{
+	const char *s = value.c_str();
+	char *end = NULL;
+
+	errno = 0;
+	long long magnitude = strtoll(s, &end, 10);
+	if (errno != 0 || end == s || magnitude < 0)
+		throw std::runtime_error("config: invalid byte quantity for '" + key +
+								 "': \"" + value + "\"");
+
+	while (*end == ' ' || *end == '\t')
+		end++;
+
+	std::string suffix(end);
+	long long factor;
+	if (suffix.empty() || suffix == "B")
+		factor = 1;
+	else if (suffix == "KiB")
+		factor = 1LL << 10;
+	else if (suffix == "MiB")
+		factor = 1LL << 20;
+	else if (suffix == "GiB")
+		factor = 1LL << 30;
+	else if (suffix == "TiB")
+		factor = 1LL << 40;
+	else
+		throw std::runtime_error("config: invalid byte quantity for '" + key +
+								 "': \"" + value + "\"");
+
+	if (magnitude > LLONG_MAX / factor)
+		throw std::runtime_error("config: byte quantity overflow for '" + key +
+								 "': \"" + value + "\"");
+	return magnitude * factor;
+}
+
+static long long parse_byte_range(const std::string& key,
+								  const std::string& value,
+								  long long min_v, long long max_v)
+{
+	long long v = parse_byte_quantity(key, value);
+	if (v < min_v || v > max_v)
+		throw std::runtime_error("config: value for '" + key +
+								 "' out of range [" + std::to_string(min_v) +
+								 ", " + std::to_string(max_v) + "]: " +
+								 std::to_string(v));
+	return v;
+}
+
 ServerConfig load_config(const std::string& path)
 {
 	std::ifstream in(path);
@@ -89,11 +141,11 @@ ServerConfig load_config(const std::string& path)
 			cfg.root = value;
 		}
 		else if (key == "cap_bytes")
-			cfg.cap_bytes = parse_range(key, value, 1, 1LL << 40);
+			cfg.cap_bytes = parse_byte_range(key, value, 1, 1LL << 40);
 		else if (key == "size_threshold_bytes")
 			cfg.size_threshold_bytes = parse_range(key, value, 0, 1LL << 40);
 		else if (key == "rate_bytes_per_sec")
-			cfg.rate_bytes_per_sec = parse_range(key, value, 0, 1LL << 40);
+			cfg.rate_bytes_per_sec = parse_byte_range(key, value, 0, 1LL << 40);
 		else if (key == "max_wait_sec")
 			cfg.max_wait_sec = (int)parse_range(key, value, 0, 3600);
 		else if (key == "trust_hops")

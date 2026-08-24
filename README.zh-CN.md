@@ -47,18 +47,22 @@
 ```bash
 xmake run ferry-client -- http://host:8080/path/file.bin
 ferry-client -j 8 -o out.bin --checksum sha-256=<hex> <url>
+ferry-client --chunk-size 16 --single-stream-limit 512 <url>
 ```
 
 | 选项 | 默认值 | 含义 |
 |---|---|---|
 | `-o, --output PATH` | URL 的 basename | 输出文件（数据先写入 `<out>.part`） |
 | `-j, --jobs N` | `4` | 工作线程数（实际生效 = min(jobs, 分块数)） |
-| `--chunk-size BYTES` | `8388608` | 单次请求的块大小 —— 限定每个响应的内存占用 |
+| `--chunk-size MiB` | `8 MiB` | 单次请求的块大小，以整数 MiB 数量输入 —— 限定每个响应的内存占用 |
 | `--checksum sha-256=<hex>` | 关闭 | 期望的摘要；不匹配则保留文件并报错失败 |
 | `--no-verify` | 关闭 | 跳过最后的 sha256 校验（否则摘要总是会被计算并打印） |
 | `--receive-timeout SEC` | `60` | 单请求超时 —— 必须大于服务端的 `max_wait_sec` |
-| `--single-stream-limit BYTES` | `256 MiB` | 对不支持 Range 的服务器可接受的最大文件大小 |
+| `--single-stream-limit MiB` | `256 MiB` | 对不支持 Range 的服务器可接受的最大文件大小，以整数 MiB 数量输入 |
 | `-q, --quiet` | 关闭 | 不打印每秒进度行 |
+
+两个 `MiB` 参数都填写不带后缀的整数数量：应写成 `--chunk-size 8`，
+而不是 `--chunk-size 8MiB`。客户端会检查溢出并在内部换算为字节。
 
 **断点续传。** 进度持久化在 `<out>.part`（数据）+ `<out>.ferry.json`
 （url、大小、Last-Modified、chunk_size、完成位图）中，
@@ -95,6 +99,12 @@ xmake run ferry-server config/server.conf
 ### 配置参考（`config/server.conf`）
 
 扁平的 `key = value` 格式文件；`#` 为注释。非法值会导致启动时直接报错。
+
+`cap_bytes` 和 `rate_bytes_per_sec` 既可以填写十进制字节数，也可以在整数后
+添加区分大小写的二进制单位 `B`、`KiB`、`MiB`、`GiB` 或 `TiB`；整数与
+单位之间可以有空格。例如 `cap_bytes = 8MiB` 表示单响应上限为 8 MiB，
+`rate_bytes_per_sec = 10 MiB` 表示每秒 10 MiB。不支持 `MB` 等十进制单位
+或小数值。
 
 | 键 | 默认值 | 含义 |
 |---|---|---|

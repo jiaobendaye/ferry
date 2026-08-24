@@ -3,9 +3,7 @@
 ## Purpose
 
 Multi-threaded, resumable HTTP download client: fixed-size chunks dynamically claimed by parallel workers, resume state persisted atomically (.part + meta JSON), generic Range-server probing with single-stream fallback, chunk-level retry with exponential backoff and Retry-After handling, and a streaming sha256 gate that controls when the output file appears.
-
 ## Requirements
-
 ### Requirement: Chunk planning and dynamic claiming
 The client SHALL divide the file into fixed-size chunks of `chunk_size` bytes (default 8 MiB, configurable) and SHALL claim chunks dynamically: each worker atomically takes the next unclaimed-and-incomplete chunk until none remain. The number of active workers SHALL be `min(jobs, chunk_count)`.
 
@@ -137,12 +135,20 @@ Unless `--quiet`, the client SHALL print one progress line per second to stderr 
 - **THEN** stderr receives periodic lines containing percentage, byte counts, speed, ETA, chunk progress, and retries
 
 ### Requirement: Command-line interface
-The client SHALL accept a single URL plus `-o/--output` (default: URL basename), `-j/--jobs` (default 4), `--chunk-size` (default 8 MiB), `--checksum`, `--no-verify`, `--receive-timeout` (default 60 s), `--single-stream-limit` (default 256 MiB), and `-q/--quiet`. Invalid values SHALL fail startup with a clear error.
+The client SHALL accept a single URL plus `-o/--output` (default: URL basename), `-j/--jobs` (default 4), `--chunk-size` (integer MiB, default 8), `--checksum`, `--no-verify`, `--receive-timeout` (default 60 s), `--single-stream-limit` (integer MiB, default 256), and `-q/--quiet`. The client SHALL convert the two MiB quantities to bytes internally and reject malformed, negative, fractional, suffixed, or overflowing values with a clear error.
 
 #### Scenario: Output defaults to basename
 - **WHEN** invoked as `ferry-client http://host/dir/big.bin` without `-o`
 - **THEN** the output file is `big.bin` in the working directory
 
+#### Scenario: Client MiB quantities are converted to bytes
+- **WHEN** invoked with `--chunk-size 8 --single-stream-limit 256`
+- **THEN** the effective chunk size is 8388608 bytes and the effective single-stream limit is 268435456 bytes
+
 #### Scenario: Invalid jobs rejected
 - **WHEN** invoked with `-j 0`
 - **THEN** the client refuses to start with an error
+
+#### Scenario: Invalid MiB quantity rejected
+- **WHEN** a client MiB option is fractional, suffixed, negative, or overflows when converted to bytes
+- **THEN** the client refuses to start with an error identifying the option

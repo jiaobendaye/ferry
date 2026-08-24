@@ -1,5 +1,6 @@
 #include <cctype>
 #include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,20 @@ static long long parse_at_least(const std::string& opt, const std::string& value
 								 "' must be >= " + std::to_string(min_v) +
 								 ", got " + std::to_string(v));
 	return v;
+}
+
+/* Parse an integer count of MiB and return its checked byte value. */
+static long long parse_mib_at_least(const std::string& opt,
+									const std::string& value,
+									long long min_mib)
+{
+	const long long mib = 1LL << 20;
+	long long count = parse_at_least(opt, value, min_mib);
+
+	if (count > LLONG_MAX / mib)
+		throw std::runtime_error("ferry-client: MiB value for '" + opt +
+								 "' is too large: " + value);
+	return count * mib;
 }
 
 /* Accepts "sha-256=<64 hex chars>"; returns the digest lowercased. */
@@ -90,12 +105,12 @@ std::string usage_text()
 		"usage: ferry-client [options] <url>\n"
 		"  -o, --output PATH            output file (default: basename of the URL)\n"
 		"  -j, --jobs N                 parallel workers (default 4)\n"
-		"  --chunk-size BYTES           chunk size in bytes (default 8388608 = 8MiB)\n"
+		"  --chunk-size MiB             chunk size in MiB (default 8)\n"
 		"  --checksum sha-256=HEX       expected sha256 digest of the whole file\n"
 		"  --no-verify                  skip the final sha256 pass\n"
 		"  --receive-timeout SEC        per-request receive timeout (default 60)\n"
-		"  --single-stream-limit BYTES  size cap for non-Range downloads\n"
-		"                               (default 268435456 = 256MiB)\n"
+		"  --single-stream-limit MiB    size cap in MiB for non-Range downloads\n"
+		"                               (default 256)\n"
 		"  -q, --quiet                  suppress progress lines\n"
 		"  -h, --help                   show this help\n";
 }
@@ -168,13 +183,13 @@ ClientConfig parse_args(int argc, char **argv)
 		else if (name == "-j" || name == "--jobs")
 			cfg.jobs = (int)parse_at_least(name, take(name), 1);
 		else if (name == "--chunk-size")
-			cfg.chunk_size = parse_at_least(name, take(name), 1);
+			cfg.chunk_size = parse_mib_at_least(name, take(name), 1);
 		else if (name == "--checksum")
 			cfg.checksum = parse_checksum(take(name));
 		else if (name == "--receive-timeout")
 			cfg.receive_timeout_sec = (int)parse_at_least(name, take(name), 1);
 		else if (name == "--single-stream-limit")
-			cfg.single_stream_limit = parse_at_least(name, take(name), 0);
+			cfg.single_stream_limit = parse_mib_at_least(name, take(name), 0);
 		else
 			throw std::runtime_error("ferry-client: unknown option '" +
 									 name + "'");

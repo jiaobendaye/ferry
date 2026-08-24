@@ -149,7 +149,7 @@ check "rangeless single-stream exit" "0" "$?"
 check "rangeless hash" "$SRC_SMALL" "$(sha "$OUT/stub_small.bin" 2>/dev/null)"
 rm -f "$OUT/stub_small.bin"
 
-(cd "$OUT" && "$CLIENT" -q --single-stream-limit 1048576 -o stub_big.bin \
+(cd "$OUT" && "$CLIENT" -q --single-stream-limit 1 -o stub_big.bin \
     http://127.0.0.1:$PORT_STUB/big.bin) > "$WORK/stub_refuse.log" 2>&1
 rc=$?
 [ "$rc" != "0" ] && check "rangeless oversize refused" ok ok || check "rangeless oversize refused" ok "rc=$rc"

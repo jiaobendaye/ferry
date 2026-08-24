@@ -53,18 +53,23 @@ reassembles, and gates the final output file behind a streaming sha256.
 ```bash
 xmake run ferry-client -- http://host:8080/path/file.bin
 ferry-client -j 8 -o out.bin --checksum sha-256=<hex> <url>
+ferry-client --chunk-size 16 --single-stream-limit 512 <url>
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-o, --output PATH` | URL basename | Output file (data lands in `<out>.part` first) |
 | `-j, --jobs N` | `4` | Worker count (effective = min(jobs, chunks)) |
-| `--chunk-size BYTES` | `8388608` | Request chunk size — bounds per-response memory |
+| `--chunk-size MiB` | `8 MiB` | Request chunk size, entered as an integer MiB count — bounds per-response memory |
 | `--checksum sha-256=<hex>` | off | Expected digest; mismatch keeps files + fails |
 | `--no-verify` | off | Skip the final sha256 pass (digest is otherwise always computed and printed) |
 | `--receive-timeout SEC` | `60` | Per-request timeout — must exceed the server's `max_wait_sec` |
-| `--single-stream-limit BYTES` | `256 MiB` | Max size accepted from servers without Range support |
+| `--single-stream-limit MiB` | `256 MiB` | Max size accepted from servers without Range support, entered as an integer MiB count |
 | `-q, --quiet` | off | Suppress the per-second progress line |
+
+The two `MiB` arguments take an integer count without a suffix: use
+`--chunk-size 8`, not `--chunk-size 8MiB`. They are converted to bytes
+internally with overflow checking.
 
 **Resume.** Progress persists in `<out>.part` (data) + `<out>.ferry.json`
 (url, size, Last-Modified, chunk_size, completion bitmap), rewritten
@@ -106,6 +111,13 @@ gracefully on SIGINT/SIGTERM.
 ### Configuration reference (`config/server.conf`)
 
 Flat `key = value` file; `#` comments. Invalid values fail startup loudly.
+
+`cap_bytes` and `rate_bytes_per_sec` accept either a decimal byte count or an
+integer followed by the case-sensitive binary suffix `B`, `KiB`, `MiB`, `GiB`,
+or `TiB`; whitespace before the suffix is optional. For example,
+`cap_bytes = 8MiB` sets an 8 MiB response cap, while
+`rate_bytes_per_sec = 10 MiB` means 10 MiB/s. Decimal SI suffixes such as `MB`
+and fractional quantities are not accepted.
 
 | Key | Default | Meaning |
 |---|---|---|

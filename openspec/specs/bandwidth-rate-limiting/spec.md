@@ -37,15 +37,19 @@ The server SHALL periodically reclaim token-bucket entries for IPs that have bee
 - **THEN** that IP's bucket entry is removed and a subsequent request starts from a fresh bucket
 
 ### Requirement: Configurable rate parameters
-The rate (`rate_bytes_per_sec`), maximum wait (`max_wait_sec`), and idle-reclamation behavior SHALL be configurable. Invalid values SHALL cause startup to fail with a clear error. A rate value that disables limiting (e.g. zero or unset) SHALL mean no bandwidth limiting is applied.
+The rate (`rate_bytes_per_sec`), maximum wait (`max_wait_sec`), and idle-reclamation behavior SHALL be configurable. `rate_bytes_per_sec` SHALL accept either an unsuffixed decimal byte count or a non-negative integer followed by the case-sensitive binary byte suffix `B`, `KiB`, `MiB`, `GiB`, or `TiB`, with optional whitespace before the suffix. Invalid suffixes, multiplication overflow, and values outside the existing range SHALL cause startup to fail with a clear error identifying the key. A rate value that disables limiting (e.g. zero or unset) SHALL mean no bandwidth limiting is applied.
 
 #### Scenario: Limiting disabled
-- **WHEN** `rate_bytes_per_sec` is unset or zero
+- **WHEN** `rate_bytes_per_sec` is unset, `0`, or `0MiB`
 - **THEN** all requests are served without token-bucket delay or 429
 
+#### Scenario: Rate unit suffix honored
+- **WHEN** the configuration sets `rate_bytes_per_sec = 10MiB`
+- **THEN** the effective per-IP bandwidth rate is 10485760 bytes per second
+
 #### Scenario: Invalid rate fails startup
-- **WHEN** the configuration sets `rate_bytes_per_sec` to a negative number
-- **THEN** the server refuses to start with a clear error
+- **WHEN** the configuration sets `rate_bytes_per_sec` to an unknown suffix, a negative magnitude, an overflowing quantity, or a result outside the allowed range
+- **THEN** the server refuses to start with a clear error identifying the bad key
 
 ### Requirement: Aggregate bandwidth limit
 The server SHALL limit total bandwidth across all clients using an aggregate token bucket refilled at `rate_total_bps`, charging the number of file-content bytes served in `200`/`206` responses, with the same soft-shape-then-429 semantics as the per-IP limit (delay while the required wait is within `max_wait_sec`, otherwise `429` + `Retry-After`). Error responses without file content SHALL NOT consume aggregate tokens. A value of zero or unset SHALL disable the aggregate limit.

@@ -69,6 +69,40 @@ TEST(Config, ParsesAllKeys)
 	EXPECT_EQ(cfg.stats_interval_sec, 30);
 }
 
+TEST(Config, ParsesByteQuantitySuffixes)
+{
+	struct Case
+	{
+		const char *value;
+		long long expected;
+	};
+
+	const Case cases[] = {
+		{"1B", 1},
+		{"2 KiB", 2LL << 10},
+		{"3MiB", 3LL << 20},
+		{"4 GiB", 4LL << 30},
+		{"1TiB", 1LL << 40},
+	};
+
+	for (const Case& c : cases)
+	{
+		TmpConfig f("cap_bytes = " + std::string(c.value) + "\n" +
+					"rate_bytes_per_sec = " + c.value + "\n");
+		ferry::ServerConfig cfg = ferry::load_config(f.path());
+		EXPECT_EQ(cfg.cap_bytes, c.expected) << c.value;
+		EXPECT_EQ(cfg.rate_bytes_per_sec, c.expected) << c.value;
+	}
+}
+
+TEST(Config, ZeroRateWithUnitDisablesLimiting)
+{
+	TmpConfig f("cap_bytes = 1B\nrate_bytes_per_sec = 0MiB\n");
+	ferry::ServerConfig cfg = ferry::load_config(f.path());
+	EXPECT_EQ(cfg.cap_bytes, 1);
+	EXPECT_EQ(cfg.rate_bytes_per_sec, 0);
+}
+
 TEST(Config, DefaultsAndComments)
 {
 	TmpConfig f(
@@ -115,6 +149,19 @@ TEST(Config, InvalidValuesThrow)
 		"cap_bytes = -1",
 		"cap_bytes = abc",
 		"cap_bytes = 12x",
+		"cap_bytes = 1KB",
+		"cap_bytes = 1mib",
+		"cap_bytes = 1.5MiB",
+		"cap_bytes = 1MiB extra",
+		"cap_bytes = 9223372036854775807TiB",
+		"cap_bytes = 2TiB",
+		"rate_bytes_per_sec = -1MiB",
+		"rate_bytes_per_sec = 1MB",
+		"rate_bytes_per_sec = 1.5MiB",
+		"rate_bytes_per_sec = 9223372036854775807TiB",
+		"rate_bytes_per_sec = 2TiB",
+		"size_threshold_bytes = 1MiB",
+		"rate_total_bps = 1MiB",
 		"port = 0",
 		"port = 70000",
 		"port = -5",
