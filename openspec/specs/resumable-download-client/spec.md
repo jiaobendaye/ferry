@@ -18,15 +18,19 @@ The client SHALL divide the file into fixed-size chunks of `chunk_size` bytes (d
 - **THEN** exactly one chunk exists and one worker downloads it
 
 ### Requirement: Range mode memory bound
-In Range mode every request SHALL ask for at most `chunk_size` bytes, and the client SHALL verify each 206 response: body length equals the Content-Range interval length, interval start equals the requested offset, and total equals the expected file size. A response violating these SHALL be treated as a failed chunk attempt.
+In Range mode every request SHALL ask for at most `chunk_size` bytes, and the client SHALL verify each 206 response: body length equals the Content-Range interval length, interval start equals the requested offset, interval end does not exceed the requested logical chunk, and total equals the expected file size. A response violating these SHALL be treated as a failed chunk attempt. When a valid response ends before the logical chunk boundary, the client SHALL write the received interval and request the remaining suffix; it SHALL mark the logical chunk complete only after every byte in that chunk has been written.
 
 #### Scenario: Oversized or misaligned response rejected
-- **WHEN** a 206 response's body length differs from its Content-Range interval length
+- **WHEN** a 206 response's body length differs from its Content-Range interval length or its interval falls outside the requested logical chunk
 - **THEN** the chunk attempt fails and enters the retry path without writing data
 
 #### Scenario: Total mismatch is fatal
 - **WHEN** a 206 response's Content-Range total differs from the expected file size
 - **THEN** the download fails with a clear error
+
+#### Scenario: Short response continues the logical chunk
+- **WHEN** a client requests a 2 MiB logical chunk and the server returns valid consecutive responses capped at 1 MiB
+- **THEN** the client requests the second 1 MiB suffix and marks the logical chunk complete only after both intervals are written
 
 ### Requirement: Server capability probing
 The client SHALL probe before downloading: HEAD first; when HEAD lacks Content-Length or Accept-Ranges information (or fails), a `GET` with `Range: bytes=0-0` decides the mode — `206` selects chunk mode, `200` selects single-stream mode. A probe answered with `200` and a full body SHALL be treated as the beginning of the download, not discarded.

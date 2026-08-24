@@ -266,6 +266,7 @@ struct ChunkJob
 {
 	EngineState *st;
 	long long idx;
+	long long next_offset;				/* next unwritten byte in this chunk */
 	int attempt;
 	int fd;							/* worker-owned part-file fd */
 };
@@ -275,11 +276,13 @@ static void chunk_response(ChunkJob *job, WFHttpTask *task);
 static WFHttpTask *make_chunk_http(ChunkJob *job)
 {
 	EngineState *st = job->st;
-	long long off = chunk_offset(st->plan, job->idx);
+	long long off = job->next_offset;
+	long long chunk_start = chunk_offset(st->plan, job->idx);
 	long long len = chunk_length(st->plan, job->idx);
+	long long end = chunk_start + len - 1;
 	char range[96];
 
-	snprintf(range, sizeof(range), "bytes=%lld-%lld", off, off + len - 1);
+	snprintf(range, sizeof(range), "bytes=%lld-%lld", off, end);
 
 	WFHttpTask *task = WFTaskFactory::create_http_task(st->cfg.url, 5, 0,
 			[job](WFHttpTask *t) { chunk_response(job, t); });
@@ -297,12 +300,11 @@ static void finish_worker(ChunkJob *job)
 	delete job;
 }
 
-static void advance_after_chunk(ChunkJob *job, SubTask *cur, long long written)
+static void advance_after_chunk(ChunkJob *job, SubTask *cur)
 {
 	EngineState *st = job->st;
 
 	st->chunks_done.fetch_add(1);
-	st->bytes_done.fetch_add(written);
 
 	long long next = claim_chunk(st);
 	if (next < 0)
@@ -312,6 +314,7 @@ static void advance_after_chunk(ChunkJob *job, SubTask *cur, long long written)
 	}
 
 	job->idx = next;
+	job->next_offset = chunk_offset(st->plan, next);
 	job->attempt = 0;
 	series_of(cur)->push_back(make_chunk_http(job));
 }
@@ -352,14 +355,18 @@ static void chunk_response(ChunkJob *job, WFHttpTask *task)
 	{
 	case ChunkOutcome::SUCCESS:
 	{
-		long long expected_off = chunk_offset(st->plan, job->idx);
-		long long expected_len = chunk_length(st->plan, job->idx);
+		long long chunk_start = chunk_offset(st->plan, job->idx);
+		long long chunk_len = chunk_length(st->plan, job->idx);
+		long long chunk_end = chunk_start + chunk_len - 1;
+		long long expected_off = job->next_offset;
+		long long expected_len = chunk_end - expected_off + 1;
 		std::string cr;
 		long long s, e, total;
 
 		if (!resp_header(task, "Content-Range", &cr) ||
 			!parse_content_range(cr, &s, &e, &total) ||
 			s != expected_off ||
+			e < s || e > chunk_end ||
 			(total >= 0 && total != st->plan.file_size))
 		{
 			fail_all(st, "chunk " + std::to_string(job->idx) +
@@ -400,7 +407,7 @@ static void chunk_response(ChunkJob *job, WFHttpTask *task)
 		long long written_len = (long long)body.size();
 		WFFileIOTask *pw = WFTaskFactory::create_pwrite_task(
 					job->fd, buf, body.size(), (off_t)expected_off,
-					[job, buf, written_len](WFFileIOTask *task) {
+					[job, buf, written_len, chunk_end](WFFileIOTask *task) {
 			free(buf);
 			long ret = task->get_retval();
 			if (task->get_state() != WFT_STATE_SUCCESS || ret != written_len)
@@ -410,8 +417,19 @@ static void chunk_response(ChunkJob *job, WFHttpTask *task)
 				finish_worker(job);
 				return;
 			}
+
+			job->st->bytes_done.fetch_add(written_len);
+			job->next_offset += written_len;
+			job->attempt = 0;
+
+			if (job->next_offset <= chunk_end)
+			{
+				series_of(task)->push_back(make_chunk_http(job));
+				return;
+			}
+
 			mark_done(job->st, job->idx);
-			advance_after_chunk(job, task, written_len);
+			advance_after_chunk(job, task);
 		});
 		series_of(task)->push_back(pw);
 		return;
@@ -420,7 +438,7 @@ static void chunk_response(ChunkJob *job, WFHttpTask *task)
 	case ChunkOutcome::COMPLETE_416:
 		/* offset == size: the chunk (and file) is already complete */
 		mark_done(st, job->idx);
-		advance_after_chunk(job, task, 0);
+		advance_after_chunk(job, task);
 		return;
 
 	case ChunkOutcome::RATE_LIMITED:
@@ -490,6 +508,7 @@ static void worker_start(EngineState *st)
 	ChunkJob *job = new ChunkJob();
 	job->st = st;
 	job->idx = idx;
+	job->next_offset = chunk_offset(st->plan, idx);
 	job->attempt = 0;
 	job->fd = fd;
 

@@ -209,6 +209,19 @@ TEST_F(ClientLoop, ChunkSizeExactMultiple)
 	expect_same(this->root + "/big.bin", cfg.output);
 }
 
+TEST_F(ClientLoop, ServerCapSmallerThanClientChunk)
+{
+	/* Each 2 MiB logical chunk needs multiple responses from the 1 MiB-cap
+	   server. The client must not mark a chunk complete after its first 206. */
+	LoopServer s(this->scfg, nullptr);
+	auto cfg = client_cfg(s.url("/big.bin"), "big.bin");
+	cfg.chunk_size = 2 * 1024 * 1024;
+
+	auto out = run(cfg);
+	ASSERT_TRUE(out.success) << out.error;
+	expect_same(this->root + "/big.bin", cfg.output);
+}
+
 TEST_F(ClientLoop, SlowServerStillSucceeds)
 {
 	/* server shapes at 100 KB/s; 200 KB file -> a few seconds, no errors */
