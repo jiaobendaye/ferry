@@ -79,6 +79,16 @@ void Stats::mmap_fallback()
 	this->mmap_fallbacks_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void Stats::record_cache_advice(long long accepted_bytes, bool error)
+{
+	this->cache_advice_calls_.fetch_add(1, std::memory_order_relaxed);
+	if (accepted_bytes > 0)
+		this->cache_advice_bytes_.fetch_add(accepted_bytes,
+											 std::memory_order_relaxed);
+	if (error)
+		this->cache_advice_errors_.fetch_add(1, std::memory_order_relaxed);
+}
+
 Stats::Snapshot Stats::snapshot() const
 {
 	Snapshot s;
@@ -99,14 +109,21 @@ Stats::Snapshot Stats::snapshot() const
 											std::memory_order_relaxed);
 	s.mmap_active_peak = this->mmap_active_peak_.load(std::memory_order_relaxed);
 	s.mmap_fallbacks = this->mmap_fallbacks_.load(std::memory_order_relaxed);
+	s.cache_advice_calls = this->cache_advice_calls_.load(
+												std::memory_order_relaxed);
+	s.cache_advice_bytes = this->cache_advice_bytes_.load(
+												std::memory_order_relaxed);
+	s.cache_advice_errors = this->cache_advice_errors_.load(
+												 std::memory_order_relaxed);
 	return s;
 }
 
 std::string format_stats_line(const Stats::Snapshot& cur,
 							  const Stats::Snapshot& prev,
-							  long long qps_buckets, long long bw_buckets)
+							  long long qps_buckets, long long bw_buckets,
+							  CgroupMemorySnapshot memory)
 {
-	char buf[768];
+	char buf[1024];
 
 	snprintf(buf, sizeof(buf),
 		"[stats] reqs=%lld(+%lld) 2xx=%lld 404=%lld 4xx=%lld 5xx=%lld "
@@ -114,7 +131,9 @@ std::string format_stats_line(const Stats::Snapshot& cur,
 		"rej(inflight_per_ip)=%lld rej(rate_total)=%lld rej(rate_per_ip)=%lld "
 		"inflight=%d peak=%d buckets(qps)=%lld buckets(bw)=%lld served=%lld "
 		"mmap_resps=%lld mmap_bytes=%lld mmap_active=%lld mmap_peak=%lld "
-		"mmap_fallbacks=%lld",
+		"mmap_fallbacks=%lld cache_advice_calls=%lld "
+		"cache_advice_bytes=%lld cache_advice_errors=%lld "
+		"mem_anon=%lld mem_file=%lld mem_sock=%lld",
 		cur.requests, cur.requests - prev.requests,
 		cur.status_2xx, cur.status_404, cur.status_4xx_other, cur.status_5xx,
 		cur.gate_rejects[Stats::GATE_QPS_TOTAL],
@@ -126,7 +145,9 @@ std::string format_stats_line(const Stats::Snapshot& cur,
 		cur.inflight, cur.inflight_peak,
 		qps_buckets, bw_buckets, cur.bytes_served,
 		cur.mmap_responses, cur.mmap_bytes, cur.mmap_active_bytes,
-		cur.mmap_active_peak, cur.mmap_fallbacks);
+		cur.mmap_active_peak, cur.mmap_fallbacks,
+		cur.cache_advice_calls, cur.cache_advice_bytes, cur.cache_advice_errors,
+		memory.anon, memory.file, memory.sock);
 	return buf;
 }
 

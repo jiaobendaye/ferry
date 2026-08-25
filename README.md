@@ -124,6 +124,7 @@ Decimal SI suffixes such as `MB` and fractional quantities are not accepted.
 | `port` | `8080` | Listen port |
 | `root` | `.` | Directory whose files are served |
 | `file_body_mode` | `pread` | File body path: stable `pread`, or experimental `mmap` for A/B measurement |
+| `page_cache_policy` | `normal` | Buffered-I/O cache policy: `normal`, `noreuse`, or `drop_after_read` (`pread` only for non-normal values) |
 | `cap_bytes` | `8388608` | Max bytes per response (range truncation cap) |
 | `size_threshold_bytes` | = `cap_bytes` | Non-Range requests above this → `413` |
 | `rate_bytes_per_sec` | `0` (off) | Per-IP bandwidth limit |
@@ -174,6 +175,32 @@ default `pread` mode, peak anonymous response-buffer memory is bounded by
 128 × 8 MiB is approximately 1 GiB. With that gate off, use
 `max_connections × cap_bytes` as the conservative sizing bound.
 
+Buffered `pread` also populates Linux page cache. This is reclaimable cgroup
+`file` memory and is not included in the process's ordinary `RssAnon`; it can
+remain after requests drain. `page_cache_policy = normal` keeps the current
+cache-friendly behavior. `noreuse` submits `POSIX_FADV_NOREUSE` before each
+read, while `drop_after_read` submits `POSIX_FADV_DONTNEED` for fully covered
+pages after a successful read has copied them into the response buffer. Both
+are best-effort kernel advice, not hard cache quotas. Use `drop_after_read` for
+one-shot large artifacts; repeated downloads normally benefit from `normal`.
+Non-normal policies are rejected with `file_body_mode = mmap`. Roll back by
+restoring `page_cache_policy = normal` and restarting.
+
+Use cgroup controls for a hard total-memory boundary. For an 8 MiB cap and a
+16-request global limit (128 MiB anonymous-body budget), an initial systemd
+canary might use:
+
+```ini
+[Service]
+MemoryHigh=512M
+MemoryMax=768M
+```
+
+Size these values for baseline RSS, sockets, stacks, and any other processes in
+the cgroup. `MemoryHigh` drives reclaim/throttling; `MemoryMax` is the last line
+and can OOM-kill the unit if set below non-reclaimable demand. Never schedule
+host-wide `/proc/sys/vm/drop_caches` as a per-service cache control.
+
 `file_body_mode = mmap` is an experimental measurement path: it maps only
 the selected response range and removes the anonymous `malloc + pread`
 buffer, but Workflow still writes from memory to the socket, so this is not
@@ -211,7 +238,11 @@ Set `stats_interval_sec` to emit one parseable line at each interval:
 
 The line includes cumulative and interval request counts, status classes,
 all six gate-rejection counters, current/peak in-flight requests, active
-per-IP bucket counts, and served bytes. Send `SIGUSR1` to request a line
+per-IP bucket counts, served bytes, cache-advice calls/accepted bytes/errors,
+and cgroup-v2 `mem_anon`, `mem_file`, and `mem_sock`. Memory values are bytes;
+`-1` means unavailable. `mem_file` is cgroup-wide reclaimable file memory, not
+per-file attribution or process RSS, and advice bytes do not prove physical
+eviction. Send `SIGUSR1` to request a line
 within one second even when periodic output is disabled:
 
 ```bash
@@ -231,6 +262,7 @@ tests/system/run_l3.sh       # L3 server: curl-driven (content-verified ranges, 
 tests/system/run_client_l3.sh # L3 client: real binaries (SIGKILL-resume, checksum gates,
                              #     python http.server interop, Range-less fallback)
 tests/stress/run_stress_mmap.sh # opt-in hot-cache pread/mmap A/B benchmark
+tests/stress/run_stress_cache.sh # opt-in cold-cache policy and repeat-read benchmark
 ```
 
 AddressSanitizer run (catches nocopy-buffer lifetime bugs):

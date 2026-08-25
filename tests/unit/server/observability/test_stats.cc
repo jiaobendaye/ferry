@@ -110,10 +110,16 @@ TEST(Stats, FormatLineContainsKeyFieldsAndDeltas)
 
 	for (int i = 0; i < 10; i++)
 		st.record_request("200", 100);
+	st.record_cache_advice(4096, false);
+	st.record_cache_advice(0, true);
 
 	ferry::Stats::Snapshot prev;	/* all zeros */
 	auto cur = st.snapshot();
-	std::string line = ferry::format_stats_line(cur, prev, 3, 4);
+	ferry::CgroupMemorySnapshot memory;
+	memory.anon = 111;
+	memory.file = 222;
+	memory.sock = 333;
+	std::string line = ferry::format_stats_line(cur, prev, 3, 4, memory);
 
 	EXPECT_NE(line.find("[stats]"), std::string::npos);
 	EXPECT_NE(line.find("reqs=10(+10)"), std::string::npos);
@@ -124,6 +130,12 @@ TEST(Stats, FormatLineContainsKeyFieldsAndDeltas)
 	EXPECT_NE(line.find("rej(qps_total)=0"), std::string::npos);
 	EXPECT_NE(line.find("mmap_resps=0"), std::string::npos);
 	EXPECT_NE(line.find("mmap_fallbacks=0"), std::string::npos);
+	EXPECT_NE(line.find("cache_advice_calls=2"), std::string::npos);
+	EXPECT_NE(line.find("cache_advice_bytes=4096"), std::string::npos);
+	EXPECT_NE(line.find("cache_advice_errors=1"), std::string::npos);
+	EXPECT_NE(line.find("mem_anon=111"), std::string::npos);
+	EXPECT_NE(line.find("mem_file=222"), std::string::npos);
+	EXPECT_NE(line.find("mem_sock=333"), std::string::npos);
 	EXPECT_EQ(line.find('\n'), std::string::npos);	/* single line */
 
 	/* second interval: delta only */
@@ -132,6 +144,9 @@ TEST(Stats, FormatLineContainsKeyFieldsAndDeltas)
 	std::string line2 = ferry::format_stats_line(cur2, cur, 0, 0);
 	EXPECT_NE(line2.find("reqs=11(+1)"), std::string::npos);
 	EXPECT_NE(line2.find("rej(qps_total)=0"), std::string::npos);
+	EXPECT_NE(line2.find("mem_anon=-1"), std::string::npos);
+	EXPECT_NE(line2.find("mem_file=-1"), std::string::npos);
+	EXPECT_NE(line2.find("mem_sock=-1"), std::string::npos);
 }
 
 } // namespace

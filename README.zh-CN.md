@@ -112,6 +112,7 @@ xmake run ferry-server config/server.conf
 | `port` | `8080` | 监听端口 |
 | `root` | `.` | 提供文件服务的目录 |
 | `file_body_mode` | `pread` | 文件响应路径：稳定的 `pread`，或用于 A/B 测量的实验性 `mmap` |
+| `page_cache_policy` | `normal` | 缓冲I/O缓存策略：`normal`、`noreuse`或`drop_after_read`（非normal仅支持`pread`） |
 | `cap_bytes` | `8388608` | 每个响应的最大字节数（range 截断上限） |
 | `size_threshold_bytes` | = `cap_bytes` | 非 Range 请求超过该值 → `413` |
 | `rate_bytes_per_sec` | `0`（关闭） | 按 IP 的带宽限制 |
@@ -158,6 +159,28 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 `max_inflight × cap_bytes` 限制；例如 128 × 8 MiB 约为 1 GiB。
 该门禁关闭时，可用 `max_connections × cap_bytes` 作为保守估算。
 
+缓冲式`pread`还会填充Linux page cache。这部分是可回收的cgroup `file`
+内存，不计入进程普通`RssAnon`，并可能在请求清空后继续保留。
+`page_cache_policy = normal`保持当前有利于重复下载的行为；`noreuse`在读取前
+提交`POSIX_FADV_NOREUSE`提示；`drop_after_read`在成功读取并复制到响应缓冲
+后，对完整覆盖的页面提交`POSIX_FADV_DONTNEED`。两者都是best effort内核
+建议，不是硬缓存配额。一次性大文件可使用`drop_after_read`，热门重复下载
+通常应保持`normal`。非normal策略与mmap模式组合会被拒绝；回滚只需恢复
+`page_cache_policy = normal`并重启。
+
+总内存硬边界应由cgroup提供。例如8 MiB cap、全局16在途请求对应128 MiB
+匿名响应预算，可从以下systemd灰度配置开始：
+
+```ini
+[Service]
+MemoryHigh=512M
+MemoryMax=768M
+```
+
+实际数值还要容纳基础RSS、socket、线程栈和同cgroup其他进程。
+`MemoryHigh`触发回收/节流；`MemoryMax`过低可能因不可回收内存触发OOM。
+禁止把全局`/proc/sys/vm/drop_caches`作为单服务的生产缓存控制。
+
 `file_body_mode = mmap` 是用于测量的实验路径：它只映射本次响应区间，
 消除匿名 `malloc + pread` 缓冲，但 Workflow 仍从内存写入 socket，因此不
 是 `sendfile` 零拷贝。冷映射页可能在通信路径触发缺页；发送期间截断文件
@@ -191,7 +214,10 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 
 其中包含累计及区间请求数、各状态分类、六个门禁的拒绝计数、当前/峰值
-在途请求、活跃的按 IP bucket 数量和已服务字节。即使周期输出关闭，
+在途请求、活跃的按 IP bucket 数量、已服务字节、缓存建议调用/接受字节/错误
+计数，以及cgroup-v2的`mem_anon`、`mem_file`、`mem_sock`。内存单位为字节，
+`-1`表示不可用；`mem_file`是整个cgroup的可回收文件内存，不是单文件归因或
+进程RSS，advice字节也不代表等量物理页已被回收。即使周期输出关闭，
 也可发送 `SIGUSR1`，要求服务端在一秒内输出一行：
 
 ```bash
@@ -211,6 +237,7 @@ tests/system/run_l3.sh       # L3 服务端：curl 驱动（内容校验的 rang
 tests/system/run_client_l3.sh # L3 客户端：真实二进制（SIGKILL 后续传、校验和门禁、
                              #     python http.server 互操作、无 Range 回退）
 tests/stress/run_stress_mmap.sh # 可选：热缓存 pread/mmap A/B 压测
+tests/stress/run_stress_cache.sh # 可选：冷缓存策略与重复读取压测
 ```
 
 AddressSanitizer 运行方式（用于捕捉 nocopy-buffer 生命周期类 bug）：

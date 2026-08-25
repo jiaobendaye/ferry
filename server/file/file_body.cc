@@ -5,6 +5,7 @@
 
 #include "mmap_body.h"
 #include "pread_body.h"
+#include "cache_advisor.h"
 #include "observability/stats.h"
 
 using protocol::HttpResponse;
@@ -54,7 +55,8 @@ void FileBody::set_error()
 
 PreparedFileBody prepare_file_body(HttpResponse *resp, int fd,
 								   const FileBodySpec& spec,
-								   FileBodyMode mode, Stats *stats)
+								   FileBodyMode mode, Stats *stats,
+								   std::shared_ptr<CacheAdvisor> advisor)
 {
 	if (mode == FileBodyMode::MMAP)
 	{
@@ -66,7 +68,10 @@ PreparedFileBody prepare_file_body(HttpResponse *resp, int fd,
 	}
 
 	SubTask *task = nullptr;
-	PreadBody *body = PreadBody::prepare(resp, fd, spec, &task);
+	if (!advisor)
+		advisor = default_cache_advisor();
+	PreadBody *body = PreadBody::prepare(resp, fd, spec, stats,
+											 std::move(advisor), &task);
 	return {body, task};
 }
 

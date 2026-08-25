@@ -146,6 +146,7 @@ int main(int argc, char *argv[])
 	/* stats ticker: 1 s tick; prints on SIGUSR1 and/or every interval.
 	   Armed unconditionally so SIGUSR1 works with periodic stats off. */
 	auto prev_snapshot = std::make_shared<Stats::Snapshot>();
+	auto memory_reader = std::make_shared<CgroupMemoryReader>();
 	std::shared_ptr<PeriodicTask> stats_timer = std::make_shared<PeriodicTask>();
 	stats_timer->interval_sec = 1;
 	{
@@ -155,6 +156,7 @@ int main(int argc, char *argv[])
 		auto bw_limiter = gates.bw_per_ip_limiter;
 
 		stats_timer->work = [stats, prev_snapshot, tick_count, interval,
+							 memory_reader,
 							 qps_limiter, bw_limiter]() {
 			bool dump = stats_dump_requested.exchange(false);
 
@@ -166,22 +168,24 @@ int main(int argc, char *argv[])
 			Stats::Snapshot cur = stats->snapshot();
 			long long qb = qps_limiter ? (long long)qps_limiter->size() : 0;
 			long long bb = bw_limiter ? (long long)bw_limiter->size() : 0;
+			CgroupMemorySnapshot memory = memory_reader->snapshot();
 
 			fprintf(stderr, "%s\n",
-					format_stats_line(cur, *prev_snapshot, qb, bb).c_str());
+					format_stats_line(cur, *prev_snapshot, qb, bb, memory).c_str());
 			*prev_snapshot = cur;
 		};
 	}
 	arm_periodic(stats_timer);
 
 	fprintf(stderr,
-			"ferry-server listening: port=%u root=%s file_body=%s "
+			"ferry-server listening: port=%u root=%s file_body=%s page_cache=%s "
 			"cap=%lld threshold=%lld "
 			"rate=%lld B/s rate_total=%lld B/s max_wait=%ds trust_hops=%d "
 			"acl=%s(%zu black/%zu white) max_connections=%d "
 			"qps_total=%lld qps_per_ip=%lld max_inflight=%d "
 			"max_inflight_per_ip=%d stats_interval=%ds\n",
 			cfg.port, cfg.root.c_str(), file_body_mode_name(cfg.file_body_mode),
+			file_cache_policy_name(cfg.page_cache_policy),
 			cfg.cap_bytes, cfg.threshold(),
 			cfg.rate_bytes_per_sec, cfg.rate_total_bps, cfg.max_wait_sec,
 			cfg.trust_hops,

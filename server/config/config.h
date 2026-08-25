@@ -14,6 +14,15 @@ enum class FileBodyMode
 
 const char *file_body_mode_name(FileBodyMode mode);
 
+enum class FileCachePolicy
+{
+	NORMAL,
+	NOREUSE,
+	DROP_AFTER_READ,
+};
+
+const char *file_cache_policy_name(FileCachePolicy policy);
+
 struct ServerConfig
 {
 	unsigned short port = 8080;
@@ -27,6 +36,7 @@ struct ServerConfig
 	int acl_poll_interval_sec = 5;
 	int max_connections = 2000;
 	FileBodyMode file_body_mode = FileBodyMode::PREAD;
+	FileCachePolicy page_cache_policy = FileCachePolicy::NORMAL;
 
 	/* Admission gates; each 0 => gate disabled. Global gates protect
 	   the server (identity-independent caps); per-IP gates divide the

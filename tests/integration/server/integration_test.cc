@@ -16,6 +16,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 #include <gtest/gtest.h>
 
 #include "workflow/HttpMessage.h"
@@ -223,6 +225,57 @@ TEST_F(FileFixture, RangeExact206)
 	EXPECT_EQ(r.body.size(), 100u);
 	EXPECT_EQ((unsigned char)r.body[0], 0u);
 	EXPECT_EQ((unsigned char)r.body[99], 99u);
+}
+
+TEST_F(FileFixture, PreadCachePoliciesPreserveRangeIntegrity)
+{
+	const ferry::FileCachePolicy policies[] = {
+		ferry::FileCachePolicy::NORMAL,
+		ferry::FileCachePolicy::NOREUSE,
+		ferry::FileCachePolicy::DROP_AFTER_READ,
+	};
+	std::vector<std::string> normal_bodies;
+
+	for (ferry::FileCachePolicy policy : policies)
+	{
+		this->cfg.page_cache_policy = policy;
+		TestServer s(this->cfg, nullptr);
+		const std::pair<long long, long long> ranges[] = {
+			{0, 8191},			/* aligned */
+			{8192, 16383},		/* non-overlapping */
+			{4096, 12287},		/* overlaps both */
+		};
+
+		std::vector<std::string> bodies;
+		for (const auto& range : ranges)
+		{
+			auto r = s.get("/big.bin", {{"Range", "bytes=" +
+				std::to_string(range.first) + "-" +
+				std::to_string(range.second)}});
+			ASSERT_EQ(r.task_state, WFT_STATE_SUCCESS);
+			ASSERT_EQ(r.status, "206");
+			ASSERT_EQ(r.body.size(), 8192u);
+			for (size_t i = 0; i < r.body.size(); i++)
+				ASSERT_EQ((unsigned char)r.body[i],
+						  (unsigned char)((range.first + (long long)i) % 251));
+			bodies.push_back(r.body);
+		}
+
+		if (policy == ferry::FileCachePolicy::NORMAL)
+			normal_bodies = bodies;
+		else
+			EXPECT_EQ(bodies, normal_bodies);
+
+		auto snapshot = s.stats->snapshot();
+		if (policy == ferry::FileCachePolicy::NORMAL)
+			EXPECT_EQ(snapshot.cache_advice_calls, 0);
+		else
+		{
+			EXPECT_EQ(snapshot.cache_advice_calls, 3);
+			EXPECT_EQ(snapshot.cache_advice_errors, 0);
+			EXPECT_GT(snapshot.cache_advice_bytes, 0);
+		}
+	}
 }
 
 TEST_F(FileFixture, MmapUnalignedRange206)

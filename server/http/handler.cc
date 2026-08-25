@@ -331,6 +331,7 @@ void Handler::process(WFHttpTask *server_task)
 	body_spec.file_size = st.st_size;
 	body_spec.mtime = st.st_mtime;
 	body_spec.partial = (d.status == 206);
+	body_spec.cache_policy = this->cfg_.page_cache_policy;
 	PreparedFileBody prepared = prepare_file_body(
 						resp, fd, body_spec, this->cfg_.file_body_mode,
 						this->stats_.get());

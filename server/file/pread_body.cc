@@ -8,8 +8,10 @@ namespace ferry
 {
 
 PreadBody::PreadBody(protocol::HttpResponse *resp, const FileBodySpec& spec,
-					 void *storage)
-	: FileBody(resp, spec), storage_(storage)
+					 void *storage, Stats *stats,
+					 std::shared_ptr<CacheAdvisor> advisor)
+	: FileBody(resp, spec), storage_(storage), stats_(stats),
+	  advisor_(std::move(advisor))
 {
 }
 
@@ -19,19 +21,24 @@ PreadBody::~PreadBody()
 }
 
 PreadBody *PreadBody::prepare(protocol::HttpResponse *resp, int fd,
-							  const FileBodySpec& spec, SubTask **task_out)
+							  const FileBodySpec& spec, Stats *stats,
+							  std::shared_ptr<CacheAdvisor> advisor,
+							  SubTask **task_out)
 {
 	*task_out = nullptr;
 	void *storage = malloc(spec.length > 0 ? (size_t)spec.length : 1);
 	if (!storage)
 	{
 		close(fd);
-		PreadBody failed(resp, spec, nullptr);
+		PreadBody failed(resp, spec, nullptr, stats, std::move(advisor));
 		failed.set_error();
 		return nullptr;
 	}
 
-	PreadBody *body = new PreadBody(resp, spec, storage);
+	PreadBody *body = new PreadBody(resp, spec, storage, stats,
+										std::move(advisor));
+	body->advisor_->before_read(spec.cache_policy, fd, spec.offset,
+								 spec.length, stats);
 	WFFileIOTask *task = WFTaskFactory::create_pread_task(
 						fd, storage, (size_t)spec.length, (off_t)spec.offset,
 						PreadBody::on_read);
@@ -46,14 +53,16 @@ void PreadBody::on_read(WFFileIOTask *task)
 	long ret = task->get_retval();
 	PreadBody *body = (PreadBody *)task->user_data;
 
-	close(args->fd);
-
 	if (task->get_state() != WFT_STATE_SUCCESS || ret < 0)
 	{
+		close(args->fd);
 		body->set_error();
 		return;
 	}
 
+	body->advisor_->after_read(body->spec_.cache_policy, args->fd,
+								body->spec_.offset, (long long)ret, body->stats_);
+	close(args->fd);
 	body->set_response(args->buf, (size_t)ret);
 }
 

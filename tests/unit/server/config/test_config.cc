@@ -40,6 +40,7 @@ TEST(Config, ParsesAllKeys)
 		"acl_poll_interval_sec = 3\n"
 		"max_connections = 500\n"
 		"file_body_mode = mmap\n"
+		"page_cache_policy = normal\n"
 		"qps_total = 1000\n"
 		"qps_per_ip = 20\n"
 		"max_inflight = 500\n"
@@ -61,6 +62,8 @@ TEST(Config, ParsesAllKeys)
 	EXPECT_EQ(cfg.max_connections, 500);
 	EXPECT_EQ(cfg.file_body_mode, ferry::FileBodyMode::MMAP);
 	EXPECT_STREQ(ferry::file_body_mode_name(cfg.file_body_mode), "mmap");
+	EXPECT_EQ(cfg.page_cache_policy, ferry::FileCachePolicy::NORMAL);
+	EXPECT_STREQ(ferry::file_cache_policy_name(cfg.page_cache_policy), "normal");
 	EXPECT_EQ(cfg.qps_total, 1000);
 	EXPECT_EQ(cfg.qps_per_ip, 20);
 	EXPECT_EQ(cfg.max_inflight, 500);
@@ -132,6 +135,53 @@ TEST(Config, DefaultsAndComments)
 	EXPECT_EQ(cfg.rate_total_bps, 0);
 	EXPECT_EQ(cfg.stats_interval_sec, 0);
 	EXPECT_EQ(cfg.file_body_mode, ferry::FileBodyMode::PREAD);
+	EXPECT_EQ(cfg.page_cache_policy, ferry::FileCachePolicy::NORMAL);
+}
+
+TEST(Config, ParsesFileCachePolicies)
+{
+	struct Case
+	{
+		const char *value;
+		ferry::FileCachePolicy expected;
+	};
+
+	const Case cases[] = {
+		{"normal", ferry::FileCachePolicy::NORMAL},
+		{"noreuse", ferry::FileCachePolicy::NOREUSE},
+		{"drop_after_read", ferry::FileCachePolicy::DROP_AFTER_READ},
+	};
+
+	for (const Case& c : cases)
+	{
+		TmpConfig f("file_body_mode = pread\npage_cache_policy = " +
+					std::string(c.value) + "\n");
+		ferry::ServerConfig cfg = ferry::load_config(f.path());
+		EXPECT_EQ(cfg.page_cache_policy, c.expected) << c.value;
+		EXPECT_STREQ(ferry::file_cache_policy_name(cfg.page_cache_policy),
+					 c.value);
+	}
+}
+
+TEST(Config, RejectsNonNormalCachePolicyWithMmap)
+{
+	for (const char *policy : {"noreuse", "drop_after_read"})
+	{
+		TmpConfig f("page_cache_policy = " + std::string(policy) +
+					"\nfile_body_mode = mmap\n");
+		try
+		{
+			(void)ferry::load_config(f.path());
+			FAIL() << policy;
+		}
+		catch (const std::runtime_error& e)
+		{
+			EXPECT_NE(std::string(e.what()).find("page_cache_policy"),
+					  std::string::npos);
+			EXPECT_NE(std::string(e.what()).find("file_body_mode"),
+					  std::string::npos);
+		}
+	}
 }
 
 TEST(Config, UnknownKeyIsTolerated)
@@ -187,6 +237,8 @@ TEST(Config, InvalidValuesThrow)
 		"stats_interval_sec = -30",
 		"file_body_mode = sendfile",
 		"file_body_mode = MMAP",
+		"page_cache_policy = drop",
+		"page_cache_policy = NOREUSE",
 	};
 
 	for (const char *content : bad)

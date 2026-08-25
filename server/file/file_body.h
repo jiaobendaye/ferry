@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <ctime>
+#include <memory>
 
 #include "config/config.h"
 
@@ -17,6 +18,7 @@ namespace ferry
 {
 
 class Stats;
+class CacheAdvisor;
 
 struct FileBodySpec
 {
@@ -25,6 +27,7 @@ struct FileBodySpec
 	long long file_size;
 	time_t mtime;
 	bool partial;
+	FileCachePolicy cache_policy = FileCachePolicy::NORMAL;
 };
 
 /*
@@ -62,7 +65,8 @@ struct PreparedFileBody
  */
 PreparedFileBody prepare_file_body(protocol::HttpResponse *resp, int fd,
 								   const FileBodySpec& spec,
-								   FileBodyMode mode, Stats *stats);
+								   FileBodyMode mode, Stats *stats,
+								   std::shared_ptr<CacheAdvisor> advisor = nullptr);
 
 } // namespace ferry
 

@@ -16,6 +16,19 @@ const char *file_body_mode_name(FileBodyMode mode)
 	return mode == FileBodyMode::MMAP ? "mmap" : "pread";
 }
 
+const char *file_cache_policy_name(FileCachePolicy policy)
+{
+	switch (policy)
+	{
+	case FileCachePolicy::NOREUSE:
+		return "noreuse";
+	case FileCachePolicy::DROP_AFTER_READ:
+		return "drop_after_read";
+	default:
+		return "normal";
+	}
+}
+
 static std::string trim(const std::string& s)
 {
 	size_t b = s.find_first_not_of(" \t\r\n");
@@ -167,6 +180,19 @@ ServerConfig load_config(const std::string& path)
 					"config: invalid value for 'file_body_mode': \"" + value +
 					"\" (expected 'pread' or 'mmap')");
 		}
+		else if (key == "page_cache_policy")
+		{
+			if (value == "normal")
+				cfg.page_cache_policy = FileCachePolicy::NORMAL;
+			else if (value == "noreuse")
+				cfg.page_cache_policy = FileCachePolicy::NOREUSE;
+			else if (value == "drop_after_read")
+				cfg.page_cache_policy = FileCachePolicy::DROP_AFTER_READ;
+			else
+				throw std::runtime_error(
+					"config: invalid value for 'page_cache_policy': \"" + value +
+					"\" (expected 'normal', 'noreuse', or 'drop_after_read')");
+		}
 		else if (key == "qps_total")
 			cfg.qps_total = parse_range(key, value, 0, 1LL << 40);
 		else if (key == "qps_per_ip")
@@ -182,6 +208,16 @@ ServerConfig load_config(const std::string& path)
 		else
 			fprintf(stderr, "config: %s:%d: unknown key '%s' ignored\n",
 					path.c_str(), lineno, key.c_str());
+	}
+
+	if (cfg.file_body_mode == FileBodyMode::MMAP &&
+		cfg.page_cache_policy != FileCachePolicy::NORMAL)
+	{
+		throw std::runtime_error(
+			"config: 'page_cache_policy = " +
+			std::string(file_cache_policy_name(cfg.page_cache_policy)) +
+			"' is incompatible with 'file_body_mode = mmap' (use "
+			"'page_cache_policy = normal' or 'file_body_mode = pread')");
 	}
 
 	return cfg;

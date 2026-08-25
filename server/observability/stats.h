@@ -5,6 +5,8 @@
 #include <atomic>
 #include <string>
 
+#include "cgroup_memory.h"
+
 namespace ferry
 {
 
@@ -50,6 +52,10 @@ public:
 	void mmap_close(long long bytes);
 	void mmap_fallback();
 
+	/* Best-effort file-cache advice accounting. `accepted_bytes` is the
+	   range accepted by the syscall, not proof of physical eviction. */
+	void record_cache_advice(long long accepted_bytes, bool error);
+
 	struct Snapshot
 	{
 		long long requests = 0;
@@ -66,6 +72,9 @@ public:
 		long long mmap_active_bytes = 0;
 		long long mmap_active_peak = 0;
 		long long mmap_fallbacks = 0;
+		long long cache_advice_calls = 0;
+		long long cache_advice_bytes = 0;
+		long long cache_advice_errors = 0;
 	};
 
 	Snapshot snapshot() const;
@@ -85,6 +94,9 @@ private:
 	std::atomic<long long> mmap_active_bytes_{0};
 	std::atomic<long long> mmap_active_peak_{0};
 	std::atomic<long long> mmap_fallbacks_{0};
+	std::atomic<long long> cache_advice_calls_{0};
+	std::atomic<long long> cache_advice_bytes_{0};
+	std::atomic<long long> cache_advice_errors_{0};
 };
 
 /*
@@ -95,7 +107,8 @@ private:
  */
 std::string format_stats_line(const Stats::Snapshot& cur,
 							  const Stats::Snapshot& prev,
-							  long long qps_buckets, long long bw_buckets);
+							  long long qps_buckets, long long bw_buckets,
+							  CgroupMemorySnapshot memory = CgroupMemorySnapshot());
 
 } // namespace ferry
 
